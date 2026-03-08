@@ -6,7 +6,7 @@ import re
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
@@ -17,7 +17,7 @@ SCOPES = [
 ]
 
 
-def log(msg):
+def log(msg: str):
     print(msg, flush=True)
 
 
@@ -28,69 +28,114 @@ def get_google_client():
     return gspread.authorize(creds)
 
 
-def parse_csv_text(csv_text):
-    rows = list(csv.reader(io.StringIO(csv_text)))
-    max_cols = max((len(r) for r in rows), default=0)
-
-    if max_cols <= 1:
-        rows = list(csv.reader(io.StringIO(csv_text), delimiter="\t"))
-        max_cols = max((len(r) for r in rows), default=0)
-
-    for r in rows:
-        if len(r) < max_cols:
-            r.extend([""] * (max_cols - len(r)))
-
-    return rows
+def save_text(path: str, text: str):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
-def build_store_block(store_name, csv_text):
+def parse_csv_text(csv_text: str):
+    candidates = [
+        csv.reader(io.StringIO(csv_text)),
+        csv.reader(io.StringIO(csv_text), delimiter="\t"),
+        csv.reader(io.StringIO(csv_text), delimiter=";"),
+    ]
+
+    best_rows = []
+    best_width = 0
+
+    for reader in candidates:
+        rows = list(reader)
+        width = max((len(r) for r in rows), default=0)
+        if width > best_width:
+            best_rows = rows
+            best_width = width
+
+    if not best_rows:
+        return [[""]]
+
+    for r in best_rows:
+        if len(r) < best_width:
+            r.extend([""] * (best_width - len(r)))
+
+    return best_rows
+
+
+def build_store_block(store_name: str, csv_text: str):
     rows = parse_csv_text(csv_text)
+
     block = []
     block.append(["STORE", store_name])
     block.append([""])
     block.extend(rows)
     block.append([""])
     block.append([""])
+
     return block
 
 
 def upload_combined_to_raw_csv(all_rows):
-    log("Uploading to RAW_CSV")
+    log("Uploading combined data to RAW_CSV")
     client = get_google_client()
     sheet = client.open_by_key(SHEET_ID)
     raw_ws = sheet.worksheet("RAW_CSV")
     raw_ws.clear()
     raw_ws.update("A1", all_rows)
-    log("Upload complete")
+    log("RAW_CSV updated")
 
 
-def trigger_fill(store_name):
+def trigger_fill(store_name: str):
     apps_script_url = os.environ["APPS_SCRIPT_URL"]
     log(f"Triggering Apps Script for {store_name}")
     r = requests.get(apps_script_url, params={"store": store_name}, timeout=60)
-    log(f"Apps Script status {r.status_code}")
+    log(f"Apps Script response for {store_name}: {r.status_code}")
 
 
-def save_debug_files(page, store_name, suffix=""):
+def save_debug(page, store_name: str, suffix: str):
     png_name = f"{store_name}{suffix}.png"
     html_name = f"{store_name}{suffix}.html"
     txt_name = f"{store_name}{suffix}.txt"
 
     page.screenshot(path=png_name, full_page=True)
-
-    with open(html_name, "w", encoding="utf-8") as f:
-        f.write(page.content())
-
-    body_text = page.locator("body").inner_text()
-    with open(txt_name, "w", encoding="utf-8") as f:
-        f.write(body_text)
+    save_text(html_name, page.content())
+    save_text(txt_name, page.locator("body").inner_text())
 
     log(f"Saved debug files: {png_name}, {html_name}, {txt_name}")
 
 
-def login_and_download_first_report(playwright, store_name, username, password):
+def find_first_csv_icon(page, store_name: str):
+    # Save debug right before searching
+    save_debug(page, store_name, "_sales_day")
+
+    # Try several selectors, from most specific to broadest
+    selectors = [
+        'table tbody tr td img[src*="csv"]',
+        'table tbody tr td a img[src*="csv"]',
+        'img[src*="csv"]',
+        'a[href*="csv"]',
+        'td img',
+    ]
+
+    for selector in selectors:
+        locator = page.locator(selector)
+        count = locator.count()
+        log(f"{store_name}: selector {selector} -> {count} matches")
+
+        if count > 0:
+            for i in range(count):
+                try:
+                    el = locator.nth(i)
+                    if el.is_visible():
+                        log(f"{store_name}: using selector {selector} index {i}")
+                        return el
+                except Exception:
+                    pass
+
+    return None
+
+
+def login_and_download_first_report(playwright, store_name: str, username: str, password: str):
     browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
+    context = browser.new_context(accept_downloads=True)
     page = context.new_page()
 
     try:
@@ -106,55 +151,43 @@ def login_and_download_first_report(playwright, store_name, username, password):
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
+        # Click Sales - Day tab
         page.click("text=Sales - Day")
         page.wait_for_timeout(5000)
 
-        # Always save debug files after Sales - Day opens
-        save_debug_files(page, store_name, "_sales_day")
+        # Debug snapshot after Sales - Day opens
+        save_debug(page, store_name, "_after_sales_day_click")
 
-        body_text = page.locator("body").inner_text()
+        # Find and click actual CSV icon
+        csv_icon = find_first_csv_icon(page, store_name)
+        if csv_icon is None:
+            raise Exception(f"Could not find any visible CSV icon for {store_name}")
 
-        dates = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", body_text)
-        log(f"{store_name}: dates found = {dates[:10]}")
+        raw_csv_path = f"{store_name}_raw.csv"
 
-        if not dates:
-            raise Exception("No report date found")
+        try:
+            with page.expect_download(timeout=60000) as download_info:
+                csv_icon.click()
+            download = download_info.value
+        except PlaywrightTimeoutError:
+            raise Exception(f"Timed out waiting for CSV download for {store_name}")
 
-        shift_date = dates[0]
-        log(f"{store_name} latest date {shift_date}")
+        suggested_name = download.suggested_filename
+        log(f"{store_name}: suggested downloaded filename = {suggested_name}")
 
-        csv_text = page.evaluate(
-            """
-            async (args) => {
-                const resp = await fetch(args.url, {
-                    method: "POST",
-                    credentials: "include",
-                    headers: {
-                        "Content-Type": "application/x-www-form-urlencoded"
-                    },
-                    body: new URLSearchParams({
-                        shiftDate: args.shiftDate,
-                        csv: "true"
-                    })
-                });
-                return await resp.text();
-            }
-            """,
-            {
-                "url": f"{BASE_URL}/shifts/createDailyPdf",
-                "shiftDate": shift_date,
-            },
-        )
+        download.save_as(raw_csv_path)
+        log(f"{store_name}: saved raw CSV to {raw_csv_path}")
 
-        if not csv_text or not csv_text.strip():
-            raise Exception("CSV download failed")
+        with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
+            csv_text = f.read()
 
-        if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
-            with open(f"{store_name}_csv_response.html", "w", encoding="utf-8") as f:
-                f.write(csv_text)
-            raise Exception("Downloaded HTML instead of CSV")
+        if not csv_text.strip():
+            raise Exception(f"Downloaded CSV was empty for {store_name}")
 
-        log(f"{store_name} CSV length {len(csv_text)}")
+        # Save a debug preview too
+        save_text(f"{store_name}_raw_preview.txt", csv_text[:5000])
+
+        log(f"{store_name}: raw CSV length = {len(csv_text)}")
         return csv_text
 
     finally:
@@ -173,7 +206,9 @@ def main():
 
     with sync_playwright() as playwright:
         for store_name, username, password in stores:
-            csv_text = login_and_download_first_report(playwright, store_name, username, password)
+            csv_text = login_and_download_first_report(
+                playwright, store_name, username, password
+            )
             block = build_store_block(store_name, csv_text)
             combined_rows.extend(block)
 
