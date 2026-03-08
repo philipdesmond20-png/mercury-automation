@@ -1,12 +1,11 @@
 import os
-import csv
 import io
+import csv
 import json
-import re
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
@@ -17,24 +16,29 @@ SCOPES = [
 ]
 
 
-def log(msg: str):
+def log(msg):
     print(msg, flush=True)
 
 
 def get_google_client():
-    creds_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    creds_info = json.loads(creds_json)
+    creds_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
-def save_text(path: str, text: str):
+def save_text(path, text):
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 
 
-def parse_csv_text(csv_text: str):
-    candidates = [
+def save_debug(page, store_name, suffix):
+    page.screenshot(path=f"{store_name}{suffix}.png", full_page=True)
+    save_text(f"{store_name}{suffix}.html", page.content())
+    save_text(f"{store_name}{suffix}.txt", page.locator("body").inner_text())
+
+
+def parse_csv_text(csv_text):
+    attempts = [
         csv.reader(io.StringIO(csv_text)),
         csv.reader(io.StringIO(csv_text), delimiter="\t"),
         csv.reader(io.StringIO(csv_text), delimiter=";"),
@@ -43,7 +47,7 @@ def parse_csv_text(csv_text: str):
     best_rows = []
     best_width = 0
 
-    for reader in candidates:
+    for reader in attempts:
         rows = list(reader)
         width = max((len(r) for r in rows), default=0)
         if width > best_width:
@@ -60,82 +64,127 @@ def parse_csv_text(csv_text: str):
     return best_rows
 
 
-def build_store_block(store_name: str, csv_text: str):
+def build_store_block(store_name, csv_text):
     rows = parse_csv_text(csv_text)
-
     block = []
     block.append(["STORE", store_name])
     block.append([""])
     block.extend(rows)
     block.append([""])
     block.append([""])
-
     return block
 
 
 def upload_combined_to_raw_csv(all_rows):
     log("Uploading combined data to RAW_CSV")
-    client = get_google_client()
-    sheet = client.open_by_key(SHEET_ID)
-    raw_ws = sheet.worksheet("RAW_CSV")
-    raw_ws.clear()
-    raw_ws.update("A1", all_rows)
+    gc = get_google_client()
+    sh = gc.open_by_key(SHEET_ID)
+    ws = sh.worksheet("RAW_CSV")
+    ws.clear()
+    ws.update("A1", all_rows)
     log("RAW_CSV updated")
 
 
-def trigger_fill(store_name: str):
-    apps_script_url = os.environ["APPS_SCRIPT_URL"]
+def trigger_fill(store_name):
+    url = os.environ["APPS_SCRIPT_URL"]
     log(f"Triggering Apps Script for {store_name}")
-    r = requests.get(apps_script_url, params={"store": store_name}, timeout=60)
+    r = requests.get(url, params={"store": store_name}, timeout=60)
     log(f"Apps Script response for {store_name}: {r.status_code}")
 
 
-def save_debug(page, store_name: str, suffix: str):
-    png_name = f"{store_name}{suffix}.png"
-    html_name = f"{store_name}{suffix}.html"
-    txt_name = f"{store_name}{suffix}.txt"
-
-    page.screenshot(path=png_name, full_page=True)
-    save_text(html_name, page.content())
-    save_text(txt_name, page.locator("body").inner_text())
-
-    log(f"Saved debug files: {png_name}, {html_name}, {txt_name}")
-
-
-def find_first_csv_icon(page, store_name: str):
-    # Save debug right before searching
+def get_latest_shift_date(page, store_name):
+    # Wait for sales day grid area to stabilize
+    page.wait_for_timeout(4000)
     save_debug(page, store_name, "_sales_day")
 
-    # Try several selectors, from most specific to broadest
-    selectors = [
-        'table tbody tr td img[src*="csv"]',
-        'table tbody tr td a img[src*="csv"]',
-        'img[src*="csv"]',
-        'a[href*="csv"]',
-        'td img',
-    ]
+    js = """
+    () => {
+        const bodyText = document.body.innerText || "";
+        const matches = [...bodyText.matchAll(/\\b\\d{2}\\/\\d{2}\\/\\d{4}\\b/g)].map(m => m[0]);
 
-    for selector in selectors:
-        locator = page.locator(selector)
-        count = locator.count()
-        log(f"{store_name}: selector {selector} -> {count} matches")
+        // Prefer dates that appear in table rows near the report area
+        const rows = Array.from(document.querySelectorAll("tr"));
+        const rowDates = [];
+        for (const row of rows) {
+            const txt = row.innerText || "";
+            const m = txt.match(/\\b\\d{2}\\/\\d{2}\\/\\d{4}\\b/);
+            if (m) rowDates.push(m[0]);
+        }
 
-        if count > 0:
-            for i in range(count):
-                try:
-                    el = locator.nth(i)
-                    if el.is_visible():
-                        log(f"{store_name}: using selector {selector} index {i}")
-                        return el
-                except Exception:
-                    pass
+        const picked = rowDates.length ? rowDates[0] : (matches.length ? matches[0] : null);
 
-    return None
+        return {
+            picked,
+            rowDates: rowDates.slice(0, 10),
+            allDates: matches.slice(0, 20),
+            bodyPreview: bodyText.slice(0, 4000)
+        };
+    }
+    """
+
+    result = page.evaluate(js)
+
+    save_text(f"{store_name}_date_debug.json", json.dumps(result, indent=2))
+
+    picked = result.get("picked")
+    if not picked:
+        raise Exception(f"No report date found for {store_name}")
+
+    log(f"{store_name}: latest shift date = {picked}")
+    return picked
 
 
-def login_and_download_first_report(playwright, store_name: str, username: str, password: str):
+def download_csv_inside_session(page, store_name, shift_date):
+    log(f"{store_name}: requesting CSV for {shift_date}")
+
+    js = """
+    async (args) => {
+        const resp = await fetch('/shifts/createDailyPdf', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            },
+            body: new URLSearchParams({
+                shiftDate: args.shiftDate,
+                csv: 'true'
+            })
+        });
+
+        const text = await resp.text();
+        return {
+            status: resp.status,
+            text: text
+        };
+    }
+    """
+
+    result = page.evaluate(js, {"shiftDate": shift_date})
+    status = result["status"]
+    csv_text = result["text"]
+
+    save_text(f"{store_name}_raw_response.txt", csv_text[:20000])
+
+    if status != 200:
+        raise Exception(f"{store_name}: CSV request returned status {status}")
+
+    if not csv_text.strip():
+        raise Exception(f"{store_name}: Empty CSV response")
+
+    if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
+        save_text(f"{store_name}_raw_response.html", csv_text)
+        raise Exception(f"{store_name}: Received HTML instead of CSV")
+
+    raw_path = f"{store_name}_raw.csv"
+    save_text(raw_path, csv_text)
+    log(f"{store_name}: saved raw CSV to {raw_path}")
+
+    return csv_text
+
+
+def login_and_fetch_csv(playwright, store_name, username, password):
     browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context(accept_downloads=True)
+    context = browser.new_context()
     page = context.new_page()
 
     try:
@@ -151,43 +200,13 @@ def login_and_download_first_report(playwright, store_name: str, username: str, 
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
-        # Click Sales - Day tab
+        # Open Sales - Day tab
         page.click("text=Sales - Day")
         page.wait_for_timeout(5000)
 
-        # Debug snapshot after Sales - Day opens
-        save_debug(page, store_name, "_after_sales_day_click")
+        shift_date = get_latest_shift_date(page, store_name)
+        csv_text = download_csv_inside_session(page, store_name, shift_date)
 
-        # Find and click actual CSV icon
-        csv_icon = find_first_csv_icon(page, store_name)
-        if csv_icon is None:
-            raise Exception(f"Could not find any visible CSV icon for {store_name}")
-
-        raw_csv_path = f"{store_name}_raw.csv"
-
-        try:
-            with page.expect_download(timeout=60000) as download_info:
-                csv_icon.click()
-            download = download_info.value
-        except PlaywrightTimeoutError:
-            raise Exception(f"Timed out waiting for CSV download for {store_name}")
-
-        suggested_name = download.suggested_filename
-        log(f"{store_name}: suggested downloaded filename = {suggested_name}")
-
-        download.save_as(raw_csv_path)
-        log(f"{store_name}: saved raw CSV to {raw_csv_path}")
-
-        with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
-            csv_text = f.read()
-
-        if not csv_text.strip():
-            raise Exception(f"Downloaded CSV was empty for {store_name}")
-
-        # Save a debug preview too
-        save_text(f"{store_name}_raw_preview.txt", csv_text[:5000])
-
-        log(f"{store_name}: raw CSV length = {len(csv_text)}")
         return csv_text
 
     finally:
@@ -206,18 +225,15 @@ def main():
 
     with sync_playwright() as playwright:
         for store_name, username, password in stores:
-            csv_text = login_and_download_first_report(
-                playwright, store_name, username, password
-            )
-            block = build_store_block(store_name, csv_text)
-            combined_rows.extend(block)
+            csv_text = login_and_fetch_csv(playwright, store_name, username, password)
+            combined_rows.extend(build_store_block(store_name, csv_text))
 
     upload_combined_to_raw_csv(combined_rows)
 
     for store_name, _, _ in stores:
         trigger_fill(store_name)
 
-    log("All stores completed")
+    log("All stores completed successfully")
 
 
 if __name__ == "__main__":
