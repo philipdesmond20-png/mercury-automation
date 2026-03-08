@@ -2,6 +2,7 @@ import os
 import csv
 import io
 import json
+import re
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -82,68 +83,10 @@ def trigger_fill(store_name: str):
         raise Exception(f"Apps Script trigger failed for {store_name}: HTTP {r.status_code}")
 
 
-def login_and_download_first_report(playwright, store_name: str, username: str, password: str):
+def login_and_download_first_report(playwright, store_name: str, username: str, password: str) -> str:
     browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context(accept_downloads=True)
+    context = browser.new_context()
     page = context.new_page()
-
-    try:
-        log(f"Running {store_name}")
-
-        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle")
-
-        page.fill('input[name="loginUserName"]', username)
-        page.fill('input[name="loginPassword"]', password)
-
-        with page.expect_navigation():
-            page.click("#submitButton")
-
-        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle")
-
-        page.wait_for_selector("table")
-
-        rows = page.locator("table tbody tr")
-        row_count = rows.count()
-
-        log(f"{store_name}: table rows found = {row_count}")
-
-        if row_count == 0:
-            raise Exception("No table rows found")
-
-        # FIRST DATA ROW (latest report)
-        target_row = rows.nth(0)
-
-        report_cell = target_row.locator("td").last
-
-        icons = report_cell.locator("img")
-
-        icon_count = icons.count()
-
-        log(f"{store_name}: report icons found = {icon_count}")
-
-        if icon_count < 1:
-            raise Exception("No report icons found")
-
-        # CSV icon is the SECOND icon usually
-        csv_icon = icons.nth(1)
-
-        with page.expect_download() as download_info:
-            csv_icon.click()
-
-        download = download_info.value
-
-        path = download.path()
-
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            csv_text = f.read()
-
-        log(f"{store_name}: downloaded length {len(csv_text)}")
-
-        return csv_text
-
-    finally:
-        context.close()
-        browser.close()
 
     try:
         log(f"Running {store_name}")
@@ -159,42 +102,46 @@ def login_and_download_first_report(playwright, store_name: str, username: str, 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
         page.wait_for_selector("table", timeout=120000)
 
-        rows = page.locator("table tr")
-        row_count = rows.count()
-        log(f"{store_name}: table rows found = {row_count}")
+        # Pull all text from the page and find the first visible date
+        page_text = page.locator("body").inner_text()
+        dates = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", page_text)
 
-        target_row = None
+        if not dates:
+            page.screenshot(path=f"{store_name}_no_date_found.png", full_page=True)
+            raise Exception(f"Could not find any visible report date for {store_name}")
 
-        for i in range(row_count):
-            row = rows.nth(i)
-            links = row.locator("a")
-            if links.count() >= 3:
-                target_row = row
-                log(f"{store_name}: using row {i} as latest report row")
-                break
+        shift_date = dates[0]
+        log(f"{store_name}: first visible report date = {shift_date}")
 
-        if target_row is None:
-            page.screenshot(path=f"{store_name}_no_report_row.png", full_page=True)
-            raise Exception(f"Could not find report row for {store_name}")
+        # Use authenticated browser session to call createDailyPdf directly
+        csv_text = page.evaluate(
+            """
+            async (args) => {
+                const resp = await fetch(args.url, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                    },
+                    body: new URLSearchParams({
+                        shiftDate: args.shiftDate,
+                        csv: "true"
+                    })
+                });
+                return await resp.text();
+            }
+            """,
+            {"url": f"{BASE_URL}/shifts/createDailyPdf", "shiftDate": shift_date},
+        )
 
-        csv_link = target_row.locator("a").nth(2)
-
-        with page.expect_download(timeout=120000) as download_info:
-            csv_link.click()
-
-        download = download_info.value
-        path = download.path()
-
-        if not path:
-            raise Exception(f"Download path not available for {store_name}")
-
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            csv_text = f.read()
+        if not csv_text or not csv_text.strip():
+            raise Exception(f"{store_name}: createDailyPdf returned empty response")
 
         log(f"{store_name}: downloaded file length = {len(csv_text)}")
 
         if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
-            raise Exception(f"Downloaded HTML instead of CSV for {store_name}")
+            page.screenshot(path=f"{store_name}_html_instead_of_csv.png", full_page=True)
+            raise Exception(f"{store_name}: downloaded HTML instead of CSV")
 
         log(f"Completed download for {store_name}")
         return csv_text
