@@ -1,0 +1,32 @@
+services:
+  - type: cron
+    name: mercury-daily-fill
+    runtime: python
+    schedule: "0 8 * * *"   # runs every day at 8:00 AM UTC — adjust to your timezone
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: STORE_TEXACO_USERNAME
+        sync: false
+      - key: STORE_TEXACO_EMAIL
+        sync: false
+      - key: STORE_TEXACO_PASSWORD
+        sync: false
+      - key: STORE_DALTON_USERNAME
+        sync: false
+      - key: STORE_DALTON_EMAIL
+        sync: false
+      - key: STORE_DALTON_PASSWORD
+        sync: false
+      - key: STORE_ROME_USERNAME
+        sync: false
+      - key: STORE_ROME_EMAIL
+        sync: false
+      - key: STORE_ROME_PASSWORD
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: APPS_SCRIPT_URL
+        sync: false
