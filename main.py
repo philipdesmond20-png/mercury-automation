@@ -45,77 +45,82 @@ def parse_csv_text(csv_text):
 
 def build_store_block(store_name, csv_text):
     rows = parse_csv_text(csv_text)
-
     block = []
     block.append(["STORE", store_name])
     block.append([""])
-
     block.extend(rows)
-
     block.append([""])
     block.append([""])
-
     return block
 
 
 def upload_combined_to_raw_csv(all_rows):
     log("Uploading to RAW_CSV")
-
     client = get_google_client()
     sheet = client.open_by_key(SHEET_ID)
-
     raw_ws = sheet.worksheet("RAW_CSV")
-
     raw_ws.clear()
     raw_ws.update("A1", all_rows)
-
     log("Upload complete")
 
 
 def trigger_fill(store_name):
     apps_script_url = os.environ["APPS_SCRIPT_URL"]
-
     log(f"Triggering Apps Script for {store_name}")
-
-    r = requests.get(apps_script_url, params={"store": store_name})
-
+    r = requests.get(apps_script_url, params={"store": store_name}, timeout=60)
     log(f"Apps Script status {r.status_code}")
+
+
+def save_debug_files(page, store_name, suffix=""):
+    png_name = f"{store_name}{suffix}.png"
+    html_name = f"{store_name}{suffix}.html"
+    txt_name = f"{store_name}{suffix}.txt"
+
+    page.screenshot(path=png_name, full_page=True)
+
+    with open(html_name, "w", encoding="utf-8") as f:
+        f.write(page.content())
+
+    body_text = page.locator("body").inner_text()
+    with open(txt_name, "w", encoding="utf-8") as f:
+        f.write(body_text)
+
+    log(f"Saved debug files: {png_name}, {html_name}, {txt_name}")
 
 
 def login_and_download_first_report(playwright, store_name, username, password):
     browser = playwright.chromium.launch(headless=True)
-
     context = browser.new_context()
-
     page = context.new_page()
 
     try:
         log(f"Running {store_name}")
 
-        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle")
+        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle", timeout=120000)
 
         page.fill('input[name="loginUserName"]', username)
         page.fill('input[name="loginPassword"]', password)
 
-        with page.expect_navigation():
+        with page.expect_navigation(wait_until="networkidle", timeout=120000):
             page.click("#submitButton")
 
-        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle")
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
-        # CLICK SALES DAY TAB
         page.click("text=Sales - Day")
+        page.wait_for_timeout(5000)
 
-        page.wait_for_timeout(3000)
+        # Always save debug files after Sales - Day opens
+        save_debug_files(page, store_name, "_sales_day")
 
-        table_text = page.locator("table").first.inner_text()
+        body_text = page.locator("body").inner_text()
 
-        dates = re.findall(r"\d{2}/\d{2}/\d{4}", table_text)
+        dates = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", body_text)
+        log(f"{store_name}: dates found = {dates[:10]}")
 
         if not dates:
             raise Exception("No report date found")
 
         shift_date = dates[0]
-
         log(f"{store_name} latest date {shift_date}")
 
         csv_text = page.evaluate(
@@ -141,6 +146,15 @@ def login_and_download_first_report(playwright, store_name, username, password):
             },
         )
 
+        if not csv_text or not csv_text.strip():
+            raise Exception("CSV download failed")
+
+        if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
+            with open(f"{store_name}_csv_response.html", "w", encoding="utf-8") as f:
+                f.write(csv_text)
+            raise Exception("Downloaded HTML instead of CSV")
+
+        log(f"{store_name} CSV length {len(csv_text)}")
         return csv_text
 
     finally:
@@ -160,9 +174,7 @@ def main():
     with sync_playwright() as playwright:
         for store_name, username, password in stores:
             csv_text = login_and_download_first_report(playwright, store_name, username, password)
-
             block = build_store_block(store_name, csv_text)
-
             combined_rows.extend(block)
 
     upload_combined_to_raw_csv(combined_rows)
