@@ -3,7 +3,6 @@ import csv
 import io
 import json
 import re
-import datetime
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -53,41 +52,28 @@ def login(session, username, password):
 
 def get_latest_shift_date(session):
     """
-    Read the Sales Day page HTML and pick the latest date shown in the table.
-    This avoids timezone issues and avoids assuming /shifts/searchDays returns JSON.
+    Read the Sales Day page HTML and take the first visible table date.
+    This matches the top row in Mercury's Sales Day screen.
     """
     url = BASE_URL + "/shifts/index"
     r = session.get(url, timeout=60)
 
     if r.status_code != 200:
-        raise Exception(f"Failed to open shifts page: HTTP {r.status_code}")
+        raise Exception(f"Failed loading shifts page: HTTP {r.status_code}")
 
     html = r.text
 
     if "loginUserName" in html or "Session expired" in html:
         raise Exception("Session expired before reading shifts page")
 
-    # Find all dates like 03/07/2026 in page HTML
-    date_strings = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", html)
+    match = re.search(r'<td[^>]*>\s*(\d{2}/\d{2}/\d{4})\s*</td>', html, re.IGNORECASE)
 
-    if not date_strings:
-        raise Exception("Could not find any shift dates on /shifts/index")
+    if not match:
+        raise Exception("Could not locate shift date in Sales Day table")
 
-    parsed_dates = []
-    for ds in date_strings:
-        try:
-            dt = datetime.datetime.strptime(ds, "%m/%d/%Y").date()
-            parsed_dates.append((dt, ds))
-        except ValueError:
-            continue
-
-    if not parsed_dates:
-        raise Exception("Found date-like strings, but none parsed successfully")
-
-    # Choose the latest date shown on page
-    latest_dt, latest_str = max(parsed_dates, key=lambda x: x[0])
-    print(f"Latest shift detected from page: {latest_str}")
-    return latest_str
+    latest_date = match.group(1)
+    print(f"Latest shift detected from table: {latest_date}")
+    return latest_date
 
 
 def download_csv(session, shift_date):
@@ -106,30 +92,65 @@ def download_csv(session, shift_date):
 
     r = session.post(url, data=payload, headers=headers, allow_redirects=True, timeout=120)
 
-    # If Mercury sends HTML, it means export failed / session expired
-    if "<html" in r.text.lower() or "<!doctype html" in r.text.lower():
+    text = r.text.strip()
+
+    if "<html" in text.lower() or "<!doctype html" in text.lower():
         raise Exception(f"Download failed for shiftDate={shift_date}: received HTML instead of CSV")
 
-    if len(r.text.strip()) == 0:
+    if not text:
         raise Exception(f"Download failed for shiftDate={shift_date}: empty response")
 
-    return r.text
+    return text
 
 
-def upload_to_raw_csv(csv_text):
+def parse_csv_text(csv_text):
+    """
+    Mercury export parser.
+    Handles normal CSV, tab-separated fallback, and pads rows to rectangular shape.
+    """
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    max_cols = max((len(r) for r in rows), default=0)
+
+    if max_cols <= 1:
+        rows = list(csv.reader(io.StringIO(csv_text), delimiter="\t"))
+        max_cols = max((len(r) for r in rows), default=0)
+
+    if max_cols <= 1:
+        rows = [line.split("\t") for line in csv_text.splitlines()]
+        max_cols = max((len(r) for r in rows), default=0)
+
+    if not rows:
+        raise Exception("Parsed CSV is empty")
+
+    for r in rows:
+        if len(r) < max_cols:
+            r.extend([""] * (max_cols - len(r)))
+
+    return rows
+
+
+def build_store_block(store_name, shift_date, csv_text):
+    rows = parse_csv_text(csv_text)
+    width = max((len(r) for r in rows), default=2)
+    width = max(width, 2)
+
+    block = []
+    block.append(["STORE", store_name] + [""] * (width - 2))
+    block.append(["SHIFT_DATE", shift_date] + [""] * (width - 2))
+    block.append([""] * width)
+    block.extend(rows)
+    block.append([""] * width)
+    block.append([""] * width)
+    return block
+
+
+def upload_combined_to_raw_csv(all_rows):
     client = get_google_client()
     sheet = client.open_by_key(SHEET_ID)
     raw_ws = sheet.worksheet("RAW_CSV")
 
     raw_ws.clear()
-
-    reader = csv.reader(io.StringIO(csv_text))
-    rows = [row for row in reader]
-
-    if not rows:
-        raise Exception("Parsed CSV is empty")
-
-    raw_ws.update("A1", rows)
+    raw_ws.update("A1", all_rows)
 
 
 def trigger_fill(store_name):
@@ -139,42 +160,43 @@ def trigger_fill(store_name):
         raise Exception(f"Apps Script trigger failed for {store_name}: HTTP {r.status_code}")
 
 
-def run_store(store_name, username, password):
+def fetch_store_block(store_name, username, password):
     print(f"Running {store_name}")
 
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
 
     login(session, username, password)
-
     shift_date = get_latest_shift_date(session)
     print(f"{store_name} latest shift: {shift_date}")
 
     csv_text = download_csv(session, shift_date)
-    upload_to_raw_csv(csv_text)
-    trigger_fill(store_name)
+    block = build_store_block(store_name, shift_date, csv_text)
 
-    print(f"Completed {store_name}")
+    print(f"Completed download for {store_name}")
+    return block, shift_date
 
 
 def main():
-    run_store(
-        "Texaco",
-        os.environ["STORE_TEXACO_USERNAME"],
-        os.environ["STORE_TEXACO_PASSWORD"],
-    )
+    combined_rows = []
 
-    run_store(
-        "Dalton",
-        os.environ["STORE_DALTON_USERNAME"],
-        os.environ["STORE_DALTON_PASSWORD"],
-    )
+    stores = [
+        ("Texaco", os.environ["STORE_TEXACO_USERNAME"], os.environ["STORE_TEXACO_PASSWORD"]),
+        ("Dalton", os.environ["STORE_DALTON_USERNAME"], os.environ["STORE_DALTON_PASSWORD"]),
+        ("Rome KS3", os.environ["STORE_ROME_USERNAME"], os.environ["STORE_ROME_PASSWORD"]),
+    ]
 
-    run_store(
-        "Rome KS3",
-        os.environ["STORE_ROME_USERNAME"],
-        os.environ["STORE_ROME_PASSWORD"],
-    )
+    for store_name, username, password in stores:
+        block, shift_date = fetch_store_block(store_name, username, password)
+        combined_rows.extend(block)
+
+    upload_combined_to_raw_csv(combined_rows)
+
+    # Trigger fill AFTER all blocks are written
+    for store_name, _, _ in stores:
+        trigger_fill(store_name)
+
+    print("All stores completed")
 
 
 if __name__ == "__main__":
