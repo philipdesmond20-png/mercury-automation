@@ -2,6 +2,7 @@ import os
 import csv
 import io
 import json
+import requests
 import gspread
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
@@ -73,7 +74,6 @@ def upload_combined_to_raw_csv(all_rows):
 
 
 def trigger_fill(store_name: str):
-    import requests
     apps_script_url = os.environ["APPS_SCRIPT_URL"]
     log(f"Triggering fill for {store_name}")
     r = requests.get(apps_script_url, params={"store": store_name}, timeout=60)
@@ -89,6 +89,7 @@ def login_and_download_first_report(playwright, store_name: str, username: str, 
 
     try:
         log(f"Running {store_name}")
+
         page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle", timeout=120000)
 
         page.locator('input[name="loginUserName"]').fill(username)
@@ -98,39 +99,27 @@ def login_and_download_first_report(playwright, store_name: str, username: str, 
             page.locator("#submitButton").click()
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
-        page.wait_for_selector("table tr", timeout=120000)
+        page.wait_for_selector("table", timeout=120000)
 
         rows = page.locator("table tr")
         row_count = rows.count()
         log(f"{store_name}: table rows found = {row_count}")
 
         target_row = None
-        import re
+
         for i in range(row_count):
             row = rows.nth(i)
-            cells = row.locator("td")
-            if cells.count() < 2:
-                continue
-            first_text = cells.nth(0).inner_text().strip()
-            if re.match(r"\d{2}/\d{2}/\d{4}", first_text):
+            links = row.locator("a")
+            if links.count() >= 3:
                 target_row = row
-                log(f"{store_name}: first report row date = {first_text}")
+                log(f"{store_name}: using row {i} as latest report row")
                 break
 
         if target_row is None:
-            page.screenshot(path=f"{store_name}_no_row_found.png", full_page=True)
-            raise Exception(f"Could not find first report row for {store_name}")
+            page.screenshot(path=f"{store_name}_no_report_row.png", full_page=True)
+            raise Exception(f"Could not find report row for {store_name}")
 
-        report_cell = target_row.locator("td").last
-        links = report_cell.locator("a")
-        link_count = links.count()
-        log(f"{store_name}: report links in first row = {link_count}")
-
-        if link_count < 3:
-            page.screenshot(path=f"{store_name}_report_cell_issue.png", full_page=True)
-            raise Exception(f"Expected 3 report links in first row for {store_name}, found {link_count}")
-
-        csv_link = links.nth(2)
+        csv_link = target_row.locator("a").nth(2)
 
         with page.expect_download(timeout=120000) as download_info:
             csv_link.click()
