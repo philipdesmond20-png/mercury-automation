@@ -93,7 +93,6 @@ def trigger_fill(store_name):
 
 
 def get_latest_shift_date(page, store_name):
-    # Wait for sales day grid area to stabilize
     page.wait_for_timeout(4000)
     save_debug(page, store_name, "_sales_day")
 
@@ -102,7 +101,6 @@ def get_latest_shift_date(page, store_name):
         const bodyText = document.body.innerText || "";
         const matches = [...bodyText.matchAll(/\\b\\d{2}\\/\\d{2}\\/\\d{4}\\b/g)].map(m => m[0]);
 
-        // Prefer dates that appear in table rows near the report area
         const rows = Array.from(document.querySelectorAll("tr"));
         const rowDates = [];
         for (const row of rows) {
@@ -123,7 +121,6 @@ def get_latest_shift_date(page, store_name):
     """
 
     result = page.evaluate(js)
-
     save_text(f"{store_name}_date_debug.json", json.dumps(result, indent=2))
 
     picked = result.get("picked")
@@ -143,7 +140,8 @@ def download_csv_inside_session(page, store_name, shift_date):
             method: 'POST',
             credentials: 'include',
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest'
             },
             body: new URLSearchParams({
                 shiftDate: args.shiftDate,
@@ -200,7 +198,6 @@ def login_and_fetch_csv(playwright, store_name, username, password):
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
-        # Open Sales - Day tab
         page.click("text=Sales - Day")
         page.wait_for_timeout(5000)
 
