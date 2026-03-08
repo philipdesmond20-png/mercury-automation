@@ -141,7 +141,8 @@ def download_csv_inside_session(page, store_name, shift_date):
             credentials: 'include',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'X-Requested-With': 'XMLHttpRequest'
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': 'https://monecloud.aboveo.com/shifts/index'
             },
             body: new URLSearchParams({
                 shiftDate: args.shiftDate,
@@ -188,7 +189,8 @@ def login_and_fetch_csv(playwright, store_name, username, password):
     try:
         log(f"Running {store_name}")
 
-        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle", timeout=120000)
+        # START directly on shifts page, not homepage
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
         page.fill('input[name="loginUserName"]', username)
         page.fill('input[name="loginPassword"]', password)
@@ -196,6 +198,7 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         with page.expect_navigation(wait_until="networkidle", timeout=120000):
             page.click("#submitButton")
 
+        # Re-open shifts page after login to ensure proper module context
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
         page.click("text=Sales - Day")
