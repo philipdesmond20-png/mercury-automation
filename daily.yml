@@ -1,0 +1,37 @@
+name: Mercury POS Daily Auto-Fill
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # 8am ET daily (UTC-4). Adjust if needed.
+  workflow_dispatch:        # allows manual run from GitHub Actions tab
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run automation
+        env:
+          STORE_TEXACO_USERNAME:  ${{ secrets.STORE_TEXACO_USERNAME }}
+          STORE_TEXACO_EMAIL:     ${{ secrets.STORE_TEXACO_EMAIL }}
+          STORE_TEXACO_PASSWORD:  ${{ secrets.STORE_TEXACO_PASSWORD }}
+          STORE_DALTON_USERNAME:  ${{ secrets.STORE_DALTON_USERNAME }}
+          STORE_DALTON_EMAIL:     ${{ secrets.STORE_DALTON_EMAIL }}
+          STORE_DALTON_PASSWORD:  ${{ secrets.STORE_DALTON_PASSWORD }}
+          STORE_ROME_USERNAME:    ${{ secrets.STORE_ROME_USERNAME }}
+          STORE_ROME_EMAIL:       ${{ secrets.STORE_ROME_EMAIL }}
+          STORE_ROME_PASSWORD:    ${{ secrets.STORE_ROME_PASSWORD }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          APPS_SCRIPT_URL:        ${{ secrets.APPS_SCRIPT_URL }}
+        run: python main.py
