@@ -38,27 +38,24 @@ STORES = [
         'name':     'Texaco',
         'tab':      'Daily Account Sheet - Texaco',
         'username': os.environ.get('STORE_TEXACO_USERNAME'),
-        'email':    os.environ.get('STORE_TEXACO_EMAIL'),
         'password': os.environ.get('STORE_TEXACO_PASSWORD'),
     },
     {
         'name':     'Dalton',
         'tab':      'Daily Account Sheet - Dalton',
         'username': os.environ.get('STORE_DALTON_USERNAME'),
-        'email':    os.environ.get('STORE_DALTON_EMAIL'),
         'password': os.environ.get('STORE_DALTON_PASSWORD'),
     },
     {
         'name':     'Rome KS3',
         'tab':      'Daily Account Sheet - Rome KS3',
         'username': os.environ.get('STORE_ROME_USERNAME'),
-        'email':    os.environ.get('STORE_ROME_EMAIL'),
         'password': os.environ.get('STORE_ROME_PASSWORD'),
     },
 ]
 
 # ── Google Sheet config ───────────────────────────────────────────────────────
-SHEET_ID        = os.environ.get('GOOGLE_SHEET_ID')        # from sheet URL
+SHEET_ID        = os.environ.get('GOOGLE_SHEET_ID', '1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU')        # from sheet URL
 APPS_SCRIPT_ID  = os.environ.get('APPS_SCRIPT_ID')         # from Apps Script deployment
 APPS_SCRIPT_KEY = os.environ.get('APPS_SCRIPT_DEPLOY_KEY') # deployment URL key
 
@@ -70,9 +67,9 @@ BASE_URL = 'https://monecloud.aboveo.com'
 # MERCURY POS — LOGIN + DOWNLOAD
 # ══════════════════════════════════════════════════════════════════════════════
 
-def mercury_login(session, username, email, password):
+def mercury_login(session, username, password):
     """Log into Mercury POS and return True if successful."""
-    log.info(f'Logging in as {email}...')
+    log.info(f'Logging in as {username}...')
 
     # Get login page first (for any CSRF tokens/cookies)
     r = session.get(f'{BASE_URL}/user/homepage')
@@ -81,7 +78,6 @@ def mercury_login(session, username, email, password):
     # Submit login form
     payload = {
         'username': username,
-        'email':    email,
         'password': password,
     }
     r = session.post(f'{BASE_URL}/user/login', data=payload, allow_redirects=True)
@@ -254,7 +250,7 @@ def run():
         log.info(f'{"="*50}')
 
         # Validate credentials are set
-        if not all([store['username'], store['email'], store['password']]):
+        if not all([store['username'], store['password']]):
             log.error(f'Missing credentials for {store["name"]} — skipping')
             results.append({'store': store['name'], 'status': 'SKIPPED — missing credentials'})
             continue
@@ -267,7 +263,7 @@ def run():
 
         try:
             # 1. Login
-            if not mercury_login(session, store['username'], store['email'], store['password']):
+            if not mercury_login(session, store['username'], store['password']):
                 results.append({'store': store['name'], 'status': 'FAILED — login error'})
                 continue
 
