@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import re
+import datetime
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -50,29 +51,71 @@ def login(session, username, password):
         raise Exception("Login failed: received login page instead of authenticated session")
 
 
+def extract_latest_date_from_text(text):
+    """
+    Find all dates like 03/07/2026 in response text and return the latest one.
+    """
+    date_strings = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", text)
+
+    if not date_strings:
+        raise Exception("No dates found in response")
+
+    parsed = []
+    for ds in date_strings:
+        try:
+            dt = datetime.datetime.strptime(ds, "%m/%d/%Y").date()
+            parsed.append((dt, ds))
+        except ValueError:
+            pass
+
+    if not parsed:
+        raise Exception("Found date strings but none parsed")
+
+    latest_dt, latest_str = max(parsed, key=lambda x: x[0])
+    return latest_str
+
+
 def get_latest_shift_date(session):
     """
-    Read the Sales Day page HTML and take the first visible table date.
-    This matches the top row in Mercury's Sales Day screen.
+    Mercury loads Sales Day via XHR.
+    Use /shifts/searchDays and extract the latest date from the response text.
     """
-    url = BASE_URL + "/shifts/index"
-    r = session.get(url, timeout=60)
+    url = BASE_URL + "/shifts/searchDays"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": BASE_URL + "/shifts/index",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    # Try GET first
+    r = session.get(url, headers=headers, timeout=60)
+
+    if r.status_code == 200 and "loginUserName" not in r.text:
+        try:
+            latest_date = extract_latest_date_from_text(r.text)
+            print(f"Latest shift detected from searchDays GET: {latest_date}")
+            return latest_date
+        except Exception:
+            pass
+
+    # Fallback: POST with current month/year like the UI
+    today = datetime.date.today()
+    payload = {
+        "month": f"{today.month:02d}",
+        "year": str(today.year),
+    }
+
+    r = session.post(url, data=payload, headers=headers, timeout=60)
 
     if r.status_code != 200:
-        raise Exception(f"Failed loading shifts page: HTTP {r.status_code}")
+        raise Exception(f"searchDays failed: HTTP {r.status_code}")
 
-    html = r.text
+    if "loginUserName" in r.text or "Session expired" in r.text:
+        raise Exception("Session expired before reading searchDays")
 
-    if "loginUserName" in html or "Session expired" in html:
-        raise Exception("Session expired before reading shifts page")
-
-    match = re.search(r'<td[^>]*>\s*(\d{2}/\d{2}/\d{4})\s*</td>', html, re.IGNORECASE)
-
-    if not match:
-        raise Exception("Could not locate shift date in Sales Day table")
-
-    latest_date = match.group(1)
-    print(f"Latest shift detected from table: {latest_date}")
+    latest_date = extract_latest_date_from_text(r.text)
+    print(f"Latest shift detected from searchDays POST: {latest_date}")
     return latest_date
 
 
@@ -167,6 +210,7 @@ def fetch_store_block(store_name, username, password):
     session.headers.update({"User-Agent": "Mozilla/5.0"})
 
     login(session, username, password)
+
     shift_date = get_latest_shift_date(session)
     print(f"{store_name} latest shift: {shift_date}")
 
@@ -174,7 +218,7 @@ def fetch_store_block(store_name, username, password):
     block = build_store_block(store_name, shift_date, csv_text)
 
     print(f"Completed download for {store_name}")
-    return block, shift_date
+    return block
 
 
 def main():
@@ -187,12 +231,11 @@ def main():
     ]
 
     for store_name, username, password in stores:
-        block, shift_date = fetch_store_block(store_name, username, password)
+        block = fetch_store_block(store_name, username, password)
         combined_rows.extend(block)
 
     upload_combined_to_raw_csv(combined_rows)
 
-    # Trigger fill AFTER all blocks are written
     for store_name, _, _ in stores:
         trigger_fill(store_name)
 
