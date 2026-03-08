@@ -2,14 +2,12 @@ import os
 import csv
 import io
 import json
-import re
-import datetime
-import requests
 import gspread
 from google.oauth2.service_account import Credentials
+from playwright.sync_api import sync_playwright
 
-BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
+BASE_URL = "https://monecloud.aboveo.com"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -24,133 +22,7 @@ def get_google_client():
     return gspread.authorize(creds)
 
 
-def login(session, username, password):
-    url = BASE_URL + "/user/authenticateLogin/loginForm"
-
-    payload = {
-        "loginUserName": username,
-        "loginPassword": password,
-    }
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Mozilla/5.0",
-        "Referer": BASE_URL + "/user/homepage",
-    }
-
-    r = session.post(url, data=payload, headers=headers, allow_redirects=True, timeout=60)
-
-    bad_markers = [
-        "Session expired",
-        'name="loginUserName"',
-        'name="loginPassword"',
-        "/user/authenticateLogin/loginForm",
-        "<title>MercuryOne</title>",
-    ]
-    if any(marker in r.text for marker in bad_markers):
-        raise Exception("Login failed: received login page instead of authenticated session")
-
-
-def extract_latest_date_from_text(text):
-    """
-    Find all dates like 03/07/2026 in response text and return the latest one.
-    """
-    date_strings = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", text)
-
-    if not date_strings:
-        raise Exception("No dates found in response")
-
-    parsed = []
-    for ds in date_strings:
-        try:
-            dt = datetime.datetime.strptime(ds, "%m/%d/%Y").date()
-            parsed.append((dt, ds))
-        except ValueError:
-            pass
-
-    if not parsed:
-        raise Exception("Found date strings but none parsed")
-
-    latest_dt, latest_str = max(parsed, key=lambda x: x[0])
-    return latest_str
-
-
-def get_latest_shift_date(session):
-    """
-    Mercury loads Sales Day via XHR.
-    Use /shifts/searchDays and extract the latest date from the response text.
-    """
-    url = BASE_URL + "/shifts/searchDays"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": BASE_URL + "/shifts/index",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
-    # Try GET first
-    r = session.get(url, headers=headers, timeout=60)
-
-    if r.status_code == 200 and "loginUserName" not in r.text:
-        try:
-            latest_date = extract_latest_date_from_text(r.text)
-            print(f"Latest shift detected from searchDays GET: {latest_date}")
-            return latest_date
-        except Exception:
-            pass
-
-    # Fallback: POST with current month/year like the UI
-    today = datetime.date.today()
-    payload = {
-        "month": f"{today.month:02d}",
-        "year": str(today.year),
-    }
-
-    r = session.post(url, data=payload, headers=headers, timeout=60)
-
-    if r.status_code != 200:
-        raise Exception(f"searchDays failed: HTTP {r.status_code}")
-
-    if "loginUserName" in r.text or "Session expired" in r.text:
-        raise Exception("Session expired before reading searchDays")
-
-    latest_date = extract_latest_date_from_text(r.text)
-    print(f"Latest shift detected from searchDays POST: {latest_date}")
-    return latest_date
-
-
-def download_csv(session, shift_date):
-    url = BASE_URL + "/shifts/createDailyPdf"
-
-    payload = {
-        "shiftDate": shift_date,
-        "csv": "true",
-    }
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": BASE_URL + "/user/homepage",
-        "User-Agent": "Mozilla/5.0",
-    }
-
-    r = session.post(url, data=payload, headers=headers, allow_redirects=True, timeout=120)
-
-    text = r.text.strip()
-
-    if "<html" in text.lower() or "<!doctype html" in text.lower():
-        raise Exception(f"Download failed for shiftDate={shift_date}: received HTML instead of CSV")
-
-    if not text:
-        raise Exception(f"Download failed for shiftDate={shift_date}: empty response")
-
-    return text
-
-
-def parse_csv_text(csv_text):
-    """
-    Mercury export parser.
-    Handles normal CSV, tab-separated fallback, and pads rows to rectangular shape.
-    """
+def parse_csv_text(csv_text: str):
     rows = list(csv.reader(io.StringIO(csv_text)))
     max_cols = max((len(r) for r in rows), default=0)
 
@@ -172,14 +44,13 @@ def parse_csv_text(csv_text):
     return rows
 
 
-def build_store_block(store_name, shift_date, csv_text):
+def build_store_block(store_name: str, csv_text: str):
     rows = parse_csv_text(csv_text)
     width = max((len(r) for r in rows), default=2)
     width = max(width, 2)
 
     block = []
     block.append(["STORE", store_name] + [""] * (width - 2))
-    block.append(["SHIFT_DATE", shift_date] + [""] * (width - 2))
     block.append([""] * width)
     block.extend(rows)
     block.append([""] * width)
@@ -191,48 +62,107 @@ def upload_combined_to_raw_csv(all_rows):
     client = get_google_client()
     sheet = client.open_by_key(SHEET_ID)
     raw_ws = sheet.worksheet("RAW_CSV")
-
     raw_ws.clear()
     raw_ws.update("A1", all_rows)
 
 
-def trigger_fill(store_name):
+def trigger_fill(store_name: str):
     apps_script_url = os.environ["APPS_SCRIPT_URL"]
+    import requests
     r = requests.get(apps_script_url, params={"store": store_name}, timeout=60)
     if r.status_code != 200:
         raise Exception(f"Apps Script trigger failed for {store_name}: HTTP {r.status_code}")
 
 
-def fetch_store_block(store_name, username, password):
-    print(f"Running {store_name}")
+def login_and_download_first_report(playwright, store_name: str, username: str, password: str) -> str:
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context(accept_downloads=True)
+    page = context.new_page()
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
+    try:
+        print(f"Running {store_name}")
 
-    login(session, username, password)
+        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle", timeout=120000)
 
-    shift_date = get_latest_shift_date(session)
-    print(f"{store_name} latest shift: {shift_date}")
+        # Login form based on your page HTML
+        page.locator('input[name="loginUserName"]').fill(username)
+        page.locator('input[name="loginPassword"]').fill(password)
 
-    csv_text = download_csv(session, shift_date)
-    block = build_store_block(store_name, shift_date, csv_text)
+        with page.expect_navigation(wait_until="networkidle", timeout=120000):
+            page.locator("#submitButton").click()
 
-    print(f"Completed download for {store_name}")
-    return block
+        # Go to Sales Day page
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
+
+        # Wait for table rows to appear
+        page.wait_for_selector("table tr", timeout=120000)
+
+        # Click the first yellow CSV icon in the report column.
+        # From your screenshots, the report column contains icons; yellow CSV is the last icon in the first row.
+        # We target the first data row's report cell, then click the CSV image/link inside it.
+        first_row = page.locator("table tr").nth(1)
+
+        # Safer: look for download link/image in first data row that appears to be CSV/export
+        report_cell = first_row.locator("td").last
+
+        # Try common patterns
+        clicked = False
+        download = None
+
+        candidates = [
+            report_cell.locator('a:has(img[src*="csv"])'),
+            report_cell.locator('img[src*="csv"]'),
+            report_cell.locator('a[title*="CSV"], a[title*="csv"]'),
+            report_cell.locator("a").last,
+            report_cell.locator("img").last,
+        ]
+
+        for candidate in candidates:
+            try:
+                if candidate.count() > 0:
+                    with page.expect_download(timeout=120000) as download_info:
+                        candidate.first.click()
+                    download = download_info.value
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not clicked or download is None:
+            raise Exception(f"Could not click first CSV icon for {store_name}")
+
+        path = download.path()
+        if not path:
+            raise Exception(f"Download path not available for {store_name}")
+
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            csv_text = f.read()
+
+        if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
+            raise Exception(f"Downloaded HTML instead of CSV for {store_name}")
+
+        print(f"Completed download for {store_name}")
+        return csv_text
+
+    finally:
+        context.close()
+        browser.close()
 
 
 def main():
-    combined_rows = []
-
     stores = [
         ("Texaco", os.environ["STORE_TEXACO_USERNAME"], os.environ["STORE_TEXACO_PASSWORD"]),
         ("Dalton", os.environ["STORE_DALTON_USERNAME"], os.environ["STORE_DALTON_PASSWORD"]),
         ("Rome KS3", os.environ["STORE_ROME_USERNAME"], os.environ["STORE_ROME_PASSWORD"]),
     ]
 
-    for store_name, username, password in stores:
-        block = fetch_store_block(store_name, username, password)
-        combined_rows.extend(block)
+    combined_rows = []
+
+    with sync_playwright() as playwright:
+        for store_name, username, password in stores:
+            csv_text = login_and_download_first_report(playwright, store_name, username, password)
+            block = build_store_block(store_name, csv_text)
+            combined_rows.extend(block)
 
     upload_combined_to_raw_csv(combined_rows)
 
