@@ -31,6 +31,11 @@ def save_text(path, text):
         f.write(text)
 
 
+def save_bytes(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+
+
 def save_debug(page, store_name, suffix):
     page.screenshot(path=f"{store_name}{suffix}.png", full_page=True)
     save_text(f"{store_name}{suffix}.html", page.content())
@@ -98,24 +103,22 @@ def get_latest_shift_date(page, store_name):
 
     js = """
     () => {
-        const bodyText = document.body.innerText || "";
-        const matches = [...bodyText.matchAll(/\\b\\d{2}\\/\\d{2}\\/\\d{4}\\b/g)].map(m => m[0]);
+        const rows = Array.from(document.querySelectorAll("#dayResultsTable tbody tr"));
+        const dates = [];
 
-        const rows = Array.from(document.querySelectorAll("tr"));
-        const rowDates = [];
         for (const row of rows) {
-            const txt = row.innerText || "";
-            const m = txt.match(/\\b\\d{2}\\/\\d{2}\\/\\d{4}\\b/);
-            if (m) rowDates.push(m[0]);
+            const firstCell = row.querySelector("td");
+            if (!firstCell) continue;
+            const txt = (firstCell.innerText || "").trim();
+            if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(txt)) {
+                dates.push(txt);
+            }
         }
 
-        const picked = rowDates.length ? rowDates[0] : (matches.length ? matches[0] : null);
-
         return {
-            picked,
-            rowDates: rowDates.slice(0, 10),
-            allDates: matches.slice(0, 20),
-            bodyPreview: bodyText.slice(0, 4000)
+            dates,
+            firstDate: dates.length ? dates[0] : null,
+            tableHtml: document.querySelector("#dayResultsTable") ? document.querySelector("#dayResultsTable").outerHTML.slice(0, 4000) : null
         };
     }
     """
@@ -123,7 +126,7 @@ def get_latest_shift_date(page, store_name):
     result = page.evaluate(js)
     save_text(f"{store_name}_date_debug.json", json.dumps(result, indent=2))
 
-    picked = result.get("picked")
+    picked = result.get("firstDate")
     if not picked:
         raise Exception(f"No report date found for {store_name}")
 
@@ -131,65 +134,60 @@ def get_latest_shift_date(page, store_name):
     return picked
 
 
-def download_csv_inside_session(page, store_name, shift_date):
-    log(f"{store_name}: requesting CSV for {shift_date}")
+def download_csv_via_browser(page, store_name, shift_date):
+    log(f"{store_name}: invoking browser downloadCSV('{shift_date}')")
 
-    js = """
-    async (args) => {
-        const resp = await fetch('/shifts/createDailyPdf', {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'https://monecloud.aboveo.com/shifts/index'
-            },
-            body: new URLSearchParams({
-                shiftDate: args.shiftDate,
-                csv: 'true'
-            })
-        });
+    if not page.evaluate("() => typeof downloadCSV === 'function'"):
+        raise Exception(f"{store_name}: downloadCSV function is not available on page")
 
-        const text = await resp.text();
-        return {
-            status: resp.status,
-            text: text
-        };
-    }
-    """
+    with page.expect_download(timeout=120000) as download_info:
+        page.evaluate("(date) => downloadCSV(date)", shift_date)
 
-    result = page.evaluate(js, {"shiftDate": shift_date})
-    status = result["status"]
-    csv_text = result["text"]
+    download = download_info.value
+    suggested_name = download.suggested_filename
+    log(f"{store_name}: browser download started: {suggested_name}")
 
-    save_text(f"{store_name}_raw_response.txt", csv_text[:20000])
+    temp_path = download.path()
+    if not temp_path:
+        raise Exception(f"{store_name}: download path not available")
 
-    if status != 200:
-        raise Exception(f"{store_name}: CSV request returned status {status}")
+    with open(temp_path, "rb") as f:
+        raw_bytes = f.read()
 
-    if not csv_text.strip():
-        raise Exception(f"{store_name}: Empty CSV response")
+    save_bytes(f"{store_name}_downloaded.bin", raw_bytes)
 
-    if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
-        save_text(f"{store_name}_raw_response.html", csv_text)
-        raise Exception(f"{store_name}: Received HTML instead of CSV")
+    text = None
+    for enc in ["utf-8-sig", "utf-8", "latin-1"]:
+        try:
+            text = raw_bytes.decode(enc)
+            break
+        except Exception:
+            continue
 
-    raw_path = f"{store_name}_raw.csv"
-    save_text(raw_path, csv_text)
-    log(f"{store_name}: saved raw CSV to {raw_path}")
+    if text is None:
+        raise Exception(f"{store_name}: could not decode downloaded file")
 
-    return csv_text
+    save_text(f"{store_name}_raw.csv", text)
+
+    if "<html" in text.lower() or "<!doctype html" in text.lower():
+        save_text(f"{store_name}_raw_response.html", text)
+        raise Exception(f"{store_name}: downloaded HTML instead of CSV")
+
+    if not text.strip():
+        raise Exception(f"{store_name}: downloaded file is empty")
+
+    log(f"{store_name}: saved proper CSV download")
+    return text
 
 
 def login_and_fetch_csv(playwright, store_name, username, password):
     browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
+    context = browser.new_context(accept_downloads=True)
     page = context.new_page()
 
     try:
         log(f"Running {store_name}")
 
-        # START directly on shifts page, not homepage
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
         page.fill('input[name="loginUserName"]', username)
@@ -198,14 +196,16 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         with page.expect_navigation(wait_until="networkidle", timeout=120000):
             page.click("#submitButton")
 
-        # Re-open shifts page after login to ensure proper module context
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
 
         page.click("text=Sales - Day")
         page.wait_for_timeout(5000)
 
+        page.wait_for_selector("#dayResultsTable", timeout=120000)
+        page.wait_for_function("() => typeof downloadCSV === 'function'", timeout=120000)
+
         shift_date = get_latest_shift_date(page, store_name)
-        csv_text = download_csv_inside_session(page, store_name, shift_date)
+        csv_text = download_csv_via_browser(page, store_name, shift_date)
 
         return csv_text
 
