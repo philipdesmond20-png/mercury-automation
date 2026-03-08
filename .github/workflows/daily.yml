@@ -33,4 +33,4 @@ jobs:
           STORE_ROME_PASSWORD: ${{ secrets.STORE_ROME_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
-        run: python main.py
+        run: python -u main.py
