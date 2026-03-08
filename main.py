@@ -82,10 +82,68 @@ def trigger_fill(store_name: str):
         raise Exception(f"Apps Script trigger failed for {store_name}: HTTP {r.status_code}")
 
 
-def login_and_download_first_report(playwright, store_name: str, username: str, password: str) -> str:
+def login_and_download_first_report(playwright, store_name: str, username: str, password: str):
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(accept_downloads=True)
     page = context.new_page()
+
+    try:
+        log(f"Running {store_name}")
+
+        page.goto(f"{BASE_URL}/user/homepage", wait_until="networkidle")
+
+        page.fill('input[name="loginUserName"]', username)
+        page.fill('input[name="loginPassword"]', password)
+
+        with page.expect_navigation():
+            page.click("#submitButton")
+
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle")
+
+        page.wait_for_selector("table")
+
+        rows = page.locator("table tbody tr")
+        row_count = rows.count()
+
+        log(f"{store_name}: table rows found = {row_count}")
+
+        if row_count == 0:
+            raise Exception("No table rows found")
+
+        # FIRST DATA ROW (latest report)
+        target_row = rows.nth(0)
+
+        report_cell = target_row.locator("td").last
+
+        icons = report_cell.locator("img")
+
+        icon_count = icons.count()
+
+        log(f"{store_name}: report icons found = {icon_count}")
+
+        if icon_count < 1:
+            raise Exception("No report icons found")
+
+        # CSV icon is the SECOND icon usually
+        csv_icon = icons.nth(1)
+
+        with page.expect_download() as download_info:
+            csv_icon.click()
+
+        download = download_info.value
+
+        path = download.path()
+
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            csv_text = f.read()
+
+        log(f"{store_name}: downloaded length {len(csv_text)}")
+
+        return csv_text
+
+    finally:
+        context.close()
+        browser.close()
 
     try:
         log(f"Running {store_name}")
