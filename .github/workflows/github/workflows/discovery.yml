@@ -1,0 +1,40 @@
+name: Mercury POS API Discovery
+
+on:
+  workflow_dispatch:   # manual trigger only
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install playwright gspread google-auth requests
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Run discovery crawler
+        env:
+          STORE_TEXACO_USERNAME:  ${{ secrets.STORE_TEXACO_USERNAME }}
+          STORE_TEXACO_PASSWORD:  ${{ secrets.STORE_TEXACO_PASSWORD }}
+          STORE_DALTON_USERNAME:  ${{ secrets.STORE_DALTON_USERNAME }}
+          STORE_DALTON_PASSWORD:  ${{ secrets.STORE_DALTON_PASSWORD }}
+          STORE_ROME_USERNAME:    ${{ secrets.STORE_ROME_USERNAME }}
+          STORE_ROME_PASSWORD:    ${{ secrets.STORE_ROME_PASSWORD }}
+        run: python discover.py
+
+      - name: Upload discovery artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: mercury-discovery
+          path: artifacts/
+          retention-days: 30
