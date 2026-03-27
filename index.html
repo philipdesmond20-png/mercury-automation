@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mercury Store Ops</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+:root{--bg:#0f172a;--c1:rgba(30,41,59,0.5);--c2:#1e293b;--c3:rgba(51,65,85,0.5);--c4:#334155;--bd:#334155;--bd2:#475569;--bdh:#3b82f6;--tx:#fff;--tx2:#cbd5e1;--tx3:#94a3b8;--tx4:#64748b;--acc:#2563eb;--ach:#1d4ed8;--act:#60a5fa;--grn:#4ade80;--gbg:rgba(20,83,45,.3);--gbd:rgba(21,128,61,.5);--red:#f87171;--rbg:rgba(127,29,29,.3);--rbd:rgba(185,28,28,.5);--yel:#facc15;--ybg:rgba(113,63,18,.3);--ybd:rgba(161,98,7,.5);--org:#fb923c;--obg:rgba(124,45,18,.3);--obd:rgba(194,65,12,.5);}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#0f172a 100%);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;font-size:16px;min-height:100vh;}
+header{background:rgba(15,23,42,.95);backdrop-filter:blur(12px);border-bottom:1px solid var(--bd);padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.logo{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.ld{width:8px;height:8px;background:var(--acc);border-radius:50%;box-shadow:0 0 8px rgba(37,99,235,.8);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(.8);}}
+.sw{display:flex;gap:8px;}
+.sb{font-size:14px;font-weight:500;padding:6px 20px;border-radius:10px;border:none;cursor:pointer;transition:all 150ms;background:var(--c3);color:var(--tx2);}
+.sb:hover{background:var(--c4);}
+.sb.on{background:var(--acc);color:#fff;box-shadow:0 4px 12px rgba(59,130,246,.5);}
+.badge{font-size:12px;font-weight:500;padding:4px 12px;border-radius:8px;}
+.bg-live{background:var(--gbg);border:1px solid var(--gbd);color:var(--grn);}
+.bg-off{background:var(--rbg);border:1px solid var(--rbd);color:var(--red);}
+.nav{background:rgba(15,23,42,.8);border-bottom:1px solid var(--bd);padding:12px 24px;display:flex;gap:8px;overflow-x:auto;}
+.nav::-webkit-scrollbar{height:0;}
+.tab{font-size:14px;font-weight:500;padding:8px 20px;border-radius:8px;border:none;cursor:pointer;transition:all 150ms;white-space:nowrap;background:var(--c3);color:var(--tx2);}
+.tab:hover{background:var(--c4);}
+.tab.on{background:var(--acc);color:#fff;box-shadow:0 4px 12px rgba(59,130,246,.5);}
+main{padding:24px;max-width:1600px;margin:0 auto;}
+.pg{display:none;}.pg.on{display:block;animation:fi .2s ease;}
+@keyframes fi{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.sh{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;}
+.sht{font-size:30px;font-weight:700;letter-spacing:-.5px;}
+.shs{font-size:14px;color:var(--tx3);margin-top:2px;}
+.tl{display:flex;align-items:center;gap:8px;margin-bottom:24px;flex-wrap:wrap;}
+.pb{font-size:14px;font-weight:500;padding:8px 24px;border-radius:12px;border:1px solid var(--bd2);cursor:pointer;transition:all 150ms;background:var(--c3);color:var(--tx2);}
+.pb:hover{background:var(--c4);}
+.pb.on{background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 4px 12px rgba(59,130,246,.3);}
+input[type=date]{font-size:14px;padding:8px 16px;border-radius:8px;border:1px solid var(--bd2);background:var(--c3);color:var(--tx);outline:none;color-scheme:dark;width:140px;}
+input[type=date]:focus{box-shadow:0 0 0 2px var(--acc);border-color:transparent;}
+.ab{font-size:14px;font-weight:500;padding:8px 20px;border-radius:8px;border:none;cursor:pointer;background:var(--acc);color:#fff;transition:all 150ms;}
+.ab:hover{background:var(--ach);}
+.kg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:24px;}
+.kp{background:var(--c1);backdrop-filter:blur(8px);border:1px solid var(--bd);border-radius:12px;padding:16px;cursor:pointer;transition:all 150ms;}
+.kp:hover{border-color:var(--bdh);box-shadow:0 4px 20px rgba(59,130,246,.2);}
+.kl{font-size:12px;font-weight:500;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;}
+.kv{font-size:24px;font-weight:700;margin-bottom:4px;line-height:1.1;}
+.ks{font-size:12px;color:var(--tx4);}
+.kh{font-size:12px;color:var(--act);margin-top:6px;}
+.kp.gd{border-color:var(--gbd);background:var(--gbg);}
+.kp.bd{border-color:rgba(239,68,68,.5);background:rgba(127,29,29,.2);border-width:2px;}
+.kp.wd{border-color:var(--obd);background:var(--obg);}
+.pos{color:var(--grn);}.neg{color:var(--red);}.neu{color:var(--tx3);}
+.card{background:var(--c1);backdrop-filter:blur(8px);border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:24px;}
+.ch{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--bd);}
+.ct{font-size:18px;font-weight:600;}
+.tb{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;}
+thead tr{background:var(--c3);}
+th{font-size:14px;font-weight:500;color:var(--tx2);padding:10px 16px;text-align:right;border-bottom:1px solid var(--bd2);white-space:nowrap;cursor:pointer;user-select:none;}
+th:first-child{text-align:left;}
+th:hover{color:var(--tx);}
+th.st{color:var(--act);}
+td{font-size:14px;color:var(--tx);padding:10px 16px;text-align:right;border-bottom:1px solid var(--bd);}
+td:first-child{text-align:left;color:var(--tx2);}
+tbody tr:hover{background:rgba(51,65,85,.3);}
+tbody tr:last-child td{border-bottom:none;}
+tfoot td{border-top:1px solid var(--bd2);border-bottom:none;background:var(--c3);font-weight:600;}
+.bdg{display:inline-flex;align-items:center;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:500;border:1px solid;}
+.bg{background:var(--gbg);border-color:var(--gbd);color:var(--grn);}
+.br{background:var(--rbg);border-color:var(--rbd);color:var(--red);}
+.by{background:var(--ybg);border-color:var(--ybd);color:var(--yel);}
+.bo{background:var(--obg);border-color:var(--obd);color:var(--org);}
+.bn{background:rgba(51,65,85,.3);border-color:rgba(71,85,105,.5);color:var(--tx3);}
+.als{display:flex;flex-direction:column;gap:8px;margin-bottom:24px;}
+.ai{display:flex;align-items:center;gap:16px;padding:16px 20px;border-radius:12px;border:1px solid var(--bd);background:var(--c1);}
+.ai.cr{border-color:rgba(239,68,68,.5);background:rgba(127,29,29,.2);border-width:2px;}
+.ai.wn{border-color:var(--obd);background:var(--obg);}
+.aico{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0;}
+.aico.r{background:rgba(239,68,68,.2);color:var(--red);}
+.aico.y{background:rgba(251,146,60,.2);color:var(--org);}
+.ain{flex:1;}.at{font-size:14px;font-weight:600;margin-bottom:2px;}.am{font-size:12px;color:var(--tx3);}.av{font-size:18px;font-weight:700;}
+.cc{background:var(--c1);backdrop-filter:blur(8px);border:1px solid var(--bd);border-radius:12px;padding:20px 24px;margin-bottom:24px;}
+.cchr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.cct{font-size:18px;font-weight:600;}
+.leg{display:flex;gap:16px;}
+.li{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx3);}
+.li-d{width:8px;height:8px;border-radius:2px;}
+.sr{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:24px;}
+.st-b{background:var(--c1);border:1px solid var(--bd);border-radius:12px;padding:16px;}
+.sl{font-size:12px;font-weight:500;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
+.sv{font-size:18px;font-weight:700;}
+.cg{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px;}
+.cc2{background:var(--c1);border:1px solid var(--bd);border-radius:12px;padding:24px;transition:all 150ms;}
+.cc2:hover{border-color:var(--bd2);}
+.cc2.sel{border-color:var(--acc);border-width:2px;box-shadow:0 4px 20px rgba(37,99,235,.2);}
+.csn{font-size:12px;font-weight:500;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;}
+.ctot{font-size:30px;font-weight:700;margin-bottom:16px;line-height:1;}
+.crow{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.cl{font-size:12px;color:var(--tx3);}.cv{font-size:14px;font-weight:500;}
+.sdv{font-size:20px;font-weight:600;margin:28px 0 16px;padding-bottom:12px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;}
+.sdv small{font-size:12px;font-weight:400;color:var(--tx3);}
+.ph{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;color:var(--tx3);font-size:14px;gap:8px;border:1px dashed var(--bd2);border-radius:12px;text-align:center;}
+.phi{font-size:40px;margin-bottom:8px;}
+.mbg{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.8);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:20px;}
+.mbg.on{display:flex;}
+.mod{background:var(--c2);border:1px solid var(--bd);border-radius:12px;box-shadow:0 25px 50px rgba(0,0,0,.5);width:100%;max-width:1000px;max-height:90vh;display:flex;flex-direction:column;}
+.mhd{display:flex;align-items:center;justify-content:space-between;padding:24px;border-bottom:1px solid var(--bd);flex-shrink:0;}
+.mtl{font-size:24px;font-weight:700;}
+.mac{display:flex;gap:8px;align-items:center;}
+.mcl{padding:8px;border-radius:8px;border:none;background:transparent;color:var(--tx3);cursor:pointer;font-size:20px;line-height:1;transition:all 150ms;}
+.mcl:hover{background:var(--c4);color:var(--tx);}
+.msr{padding:16px 24px;border-bottom:1px solid var(--bd);flex-shrink:0;}
+.si{width:100%;font-size:14px;padding:8px 16px;border-radius:8px;border:1px solid var(--bd2);background:var(--c3);color:var(--tx);outline:none;}
+.si:focus{box-shadow:0 0 0 2px var(--acc);border-color:transparent;}
+.si::placeholder{color:var(--tx4);}
+.mb{overflow-y:auto;flex:1;}
+.eb{font-size:14px;font-weight:500;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;background:#16a34a;color:#fff;transition:all 150ms;display:flex;align-items:center;gap:6px;}
+.eb:hover{background:#15803d;}
+.ldr{display:flex;align-items:center;justify-content:center;height:200px;gap:12px;font-size:14px;color:var(--tx3);}
+.sp{width:20px;height:20px;border:2px solid var(--bd2);border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+@media(max-width:1024px){.kg{grid-template-columns:repeat(3,1fr);}.sr{grid-template-columns:repeat(3,1fr);}}
+@media(max-width:768px){.kg{grid-template-columns:repeat(2,1fr);}.cg{grid-template-columns:1fr;}.sr{grid-template-columns:repeat(2,1fr);}main{padding:16px;}header{padding:0 16px;}.nav{padding:8px 16px;}.sht{font-size:24px;}}
+.refresh-btn{font-size:12px;font-weight:500;padding:5px 12px;border-radius:8px;border:1px solid var(--bd2);cursor:pointer;transition:all 150ms;background:var(--c3);color:var(--tx2);display:flex;align-items:center;gap:5px;}
+.refresh-btn:hover{background:var(--c4);border-color:var(--bdh);}
+.refresh-btn:disabled{opacity:.5;cursor:not-allowed;}
+.refresh-btn.running{border-color:var(--acc);color:var(--act);}
+.spin-icon{display:inline-block;animation:spin .8s linear infinite;}
+.refresh-toast{position:fixed;bottom:24px;right:24px;z-index:999;font-size:13px;font-weight:500;padding:12px 20px;border-radius:12px;border:1px solid;transition:all .3s;opacity:0;transform:translateY(8px);pointer-events:none;}
+.refresh-toast.show{opacity:1;transform:translateY(0);}
+.refresh-toast.success{background:var(--gbg);border-color:var(--gbd);color:var(--grn);}
+.refresh-toast.error{background:var(--rbg);border-color:var(--rbd);color:var(--red);}
+.refresh-toast.info{background:rgba(37,99,235,.15);border-color:rgba(37,99,235,.4);color:var(--act);}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><div class="ld"></div>Mercury Ops</div>
+  <div class="sw" id="sw"></div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()" title="Pull fresh data from Mercury POS">
+      <span id="refreshIcon">↻</span> Refresh Data
+    </button>
+    <span class="badge bg-live" id="sbdg">loading...</span>
+  </div>
+</header>
+<div class="refresh-toast" id="refreshToast"></div>
+<div class="nav">
+  <button class="tab on" data-tab="ov">Overview</button>
+  <button class="tab" data-tab="ops">Operations</button>
+  <button class="tab" data-tab="sal">Sales</button>
+  <button class="tab" data-tab="fin">Finance</button>
+  <button class="tab" data-tab="inv">Inventory</button>
+  <button class="tab" data-tab="pri">Price Update</button>
+  <button class="tab" data-tab="chg">Change Store</button>
+</div>
+<main>
+<div class="pg on" id="pg-ov">
+  <div class="sh"><div><div class="sht" id="ovt">Overview</div><div class="shs" id="ovs">Loading...</div></div></div>
+  <div class="kg" id="ovk"><div class="ldr" style="grid-column:1/-1"><div class="sp"></div>Fetching data...</div></div>
+  <div class="cc"><div class="cchr"><div class="cct">Month-to-date daily sales</div><div class="leg"><div class="li"><div class="li-d" style="background:#3b82f6"></div>Fuel</div><div class="li"><div class="li-d" style="background:#4ade80"></div>Grocery</div><div class="li"><div class="li-d" style="background:#facc15"></div>Lottery Net</div></div></div><div style="position:relative;height:200px"><canvas id="ovc"></canvas></div></div>
+  <div class="card"><div class="ch"><span class="ct">Month-to-date breakdown</span><span id="ovml" style="font-size:12px;color:var(--tx3)"></span></div><div class="tb" id="ovtb"></div></div>
+</div>
+<div class="pg" id="pg-ops">
+  <div class="sh"><div><div class="sht">Operations</div><div class="shs">Cash control · Over/Short · Alerts</div></div></div>
+  <div class="tl" id="opstl"></div>
+  <div class="kg" id="opsk"></div>
+  <div class="sdv">Alerts <small>|over/short| &gt; $50</small></div>
+  <div id="opsal"></div>
+  <div class="card"><div class="ch"><span class="ct">Daily over/short history</span></div><div class="tb" id="opstb"></div></div>
+</div>
+<div class="pg" id="pg-sal">
+  <div class="sh"><div><div class="sht">Sales</div><div class="shs">Fuel · Grocery · Lottery</div></div></div>
+  <div class="tl" id="saltl"></div>
+  <div class="kg" id="salk"></div>
+  <div class="card" style="margin-bottom:24px"><div class="ch"><span class="ct">Sales breakdown</span></div><div class="tb" id="saltb"></div></div>
+  <div class="sdv">Lottery <small>Net performance</small></div>
+  <div class="kg" id="lotk"></div>
+  <div class="card"><div class="ch"><span class="ct">Lottery daily detail</span></div><div class="tb" id="lottb"></div></div>
+</div>
+<div class="pg" id="pg-fin">
+  <div class="sh"><div><div class="sht">Finance</div><div class="shs">Revenue · Summary</div></div></div>
+  <div class="tl" id="fintl"></div>
+  <div class="sr" id="finsr"></div>
+  <div class="card"><div class="ch"><span class="ct">Daily financial summary</span></div><div class="tb" id="fintb"></div></div>
+</div>
+<div class="pg" id="pg-inv">
+  <div class="sh"><div class="sht">Inventory</div></div>
+  <div class="ph"><div class="phi">📦</div><div style="font-size:18px;font-weight:600;color:var(--tx2)">Inventory control — coming soon</div><div style="font-size:14px;color:var(--tx4);margin-top:4px">Stock levels, slow-moving items, stockout alerts — will connect to Mercury POS</div></div>
+</div>
+<div class="pg" id="pg-pri">
+  <div class="sh"><div class="sht">Price Update</div></div>
+  <div class="ph"><div class="phi">🏷️</div><div style="font-size:18px;font-weight:600;color:var(--tx2)">Price management — coming soon</div><div style="font-size:14px;color:var(--tx4);margin-top:4px">Changes here will sync directly to Mercury POS</div></div>
+</div>
+<div class="pg" id="pg-chg">
+  <div class="sh"><div><div class="sht">Change Store</div><div class="shs">All three stores — month to date</div></div></div>
+  <div class="cg" id="cgr"></div>
+  <div class="card"><div class="ch"><span class="ct">Side-by-side daily comparison</span></div><div class="tb" id="ctb"></div></div>
+</div>
+</main>
+<div class="mbg" id="mod"><div class="mod"><div class="mhd"><div class="mtl" id="mtl">Detail</div><div class="mac"><button class="eb" onclick="expCSV()">↓ CSV</button><button class="mcl" onclick="cMod()">✕</button></div></div><div class="msr"><input class="si" id="msi" placeholder="Search transactions…" oninput="fMod()"></div><div class="mb" id="mbd"></div></div></div>
+<script>
+const DU='./data/latest.json';
+let D=null,ST='Texaco',STS=['Texaco','Dalton','Rome KS3'];
+let rng='month',cS=null,cE=null,chts={},mD=[],sK=null,sDir='desc';
+async function init(){bSW();bNav();try{const r=await fetch(DU);if(!r.ok)throw new Error('HTTP '+r.status+' — data/latest.json not found. Upload files and run the workflow first.');D=await r.json();sSB('live',D.generated);rAll();}catch(e){sSB('off',null);document.getElementById('ovk').innerHTML=`<div style="grid-column:1/-1;padding:24px;background:rgba(127,29,29,.2);border:2px solid rgba(239,68,68,.5);border-radius:12px;color:#f87171;font-size:14px;line-height:1.6">⚠ ${e.message}</div>`;}}
+function sSB(s,d){const e=document.getElementById('sbdg');e.className='badge '+(s==='live'?'bg-live':'bg-off');e.textContent=(s==='live'?'● '+d:'● offline');}
+function bSW(){document.getElementById('sw').innerHTML=STS.map(s=>`<button class="sb ${s===ST?'on':''}" onclick="swST('${s}')">${s}</button>`).join('');}
+function swST(s){ST=s;bSW();if(D)rAll();}
+function bNav(){document.querySelectorAll('.tab').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.pg').forEach(p=>p.classList.remove('on'));b.classList.add('on');document.getElementById('pg-'+b.dataset.tab).classList.add('on');});});}
+function iso(d){return d.toISOString().slice(0,10);}
+function tod(){return iso(new Date());}
+function gdays(){return(D&&D.stores[ST]&&D.stores[ST].days)||[];}
+function flt(a){const t=tod();if(rng==='today')return a.filter(d=>d.date===t);if(rng==='yesterday')return a.filter(d=>d.date===iso(new Date(Date.now()-86400000)));if(rng==='month')return a.filter(d=>d.date>=t.slice(0,7)+'-01'&&d.date<=t);if(rng==='lastmonth'){const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-1);const s=iso(x),e=iso(new Date(x.getFullYear(),x.getMonth()+1,0));return a.filter(d=>d.date>=s&&d.date<=e);}if(rng==='custom'&&cS&&cE)return a.filter(d=>d.date>=cS&&d.date<=cE);return a;}
+function bTL(id,fn){const ps=[{k:'today',l:'Today'},{k:'yesterday',l:'Yesterday'},{k:'month',l:'This Month'},{k:'lastmonth',l:'Last Month'}];document.getElementById(id).innerHTML=ps.map(p=>`<button class="pb ${rng===p.k?'on':''}" onclick="sR('${p.k}','${fn}')">${p.l}</button>`).join('')+`<input type="date" id="${id}S" value="${cS||''}"><input type="date" id="${id}E" value="${cE||''}"><button class="ab" onclick="aC('${id}','${fn}')">Apply</button>`;}
+function sR(r,fn){rng=r;window[fn]();}
+function aC(id,fn){const s=document.getElementById(id+'S').value,e=document.getElementById(id+'E').value;if(s&&e&&s<=e){cS=s;cE=e;rng='custom';}window[fn]();}
+function fm(v){if(v===null||v===undefined)return'—';const n=parseFloat(v);if(isNaN(n))return'—';return(n<0?'-':'')+'$'+Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+function fd(v,h=true){if(v===null||v===undefined)return h?'<span class="neu">—</span>':'—';const n=parseFloat(v);if(isNaN(n))return'—';const c=n>0?'pos':n<0?'neg':'neu',a=Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');if(!h)return(n>=0?'+':'-')+'$'+a;return`<span class="${c}">${n>=0?'+':'-'}$${a}</span>`;}
+function dc(v){const n=Math.abs(parseFloat(v));return n>200?'bd':n>50?'wd':'gd';}
+function pc(a,b){return b?(a/b*100).toFixed(1)+'%':'—';}
+function sm(a,k){return a.reduce((s,r)=>s+(parseFloat(r[k])||0),0);}
+function av(a,k){return a.length?sm(a,k)/a.length:0;}
+function noD(n){return Array(n).fill(0).map(()=>`<div class="kp"><div class="kl">—</div><div class="kv neu">—</div><div class="ks">No data</div></div>`).join('');}
+function noT(){return`<div style="padding:40px;text-align:center;color:var(--tx3);font-size:14px">No data for this period</div>`;}
+const COLS=[{k:'display_date',l:'Date',s:false},{k:'total_sales',l:'Total',s:true},{k:'fuel_sales',l:'Fuel',s:true},{k:'inside_sales',l:'Grocery',s:true},{k:'lottery_net',l:'Lottery Net',s:true},{k:'cash_drop',l:'Cash Drop',s:true},{k:'over_short',l:'Over/Short',s:true}];
+function dTbl(arr){
+  if(!arr.length)return noT();
+  const t={total_sales:sm(arr,'total_sales'),fuel_sales:sm(arr,'fuel_sales'),inside_sales:sm(arr,'inside_sales'),lottery_net:sm(arr,'lottery_net'),cash_drop:sm(arr,'cash_drop'),over_short:sm(arr,'over_short')};
+  return`<table><thead><tr>${COLS.map((c,i)=>`<th class="${sK===c.k?'st':''}" ${c.s?`onclick="sCol('${c.k}')"`:''}style="${i===0?'text-align:left':''}">${c.l}${sK===c.k?(sDir==='asc'?' ↑':' ↓'):''}</th>`).join('')}</tr></thead><tbody>${arr.map(d=>`<tr><td>${d.display_date||d.date}</td><td>${fm(d.total_sales)}</td><td>${fm(d.fuel_sales)}</td><td>${fm(d.inside_sales)}</td><td>${fd(d.lottery_net)}</td><td>${fm(d.cash_drop)}</td><td>${fd(d.over_short)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total (${arr.length}d)</td><td>${fm(t.total_sales)}</td><td>${fm(t.fuel_sales)}</td><td>${fm(t.inside_sales)}</td><td>${fd(t.lottery_net.toFixed(2))}</td><td>${fm(t.cash_drop)}</td><td>${fd(t.over_short.toFixed(2))}</td></tr></tfoot></table>`;
+}
+function rAll(){rOv();rOps();rSal();rFin();rChg();}
+function rOv(){
+  const d=gdays();if(!d.length)return;
+  const t=tod(),mtd=d.filter(x=>x.date>=t.slice(0,7)+'-01'&&x.date<=t),lat=d[d.length-1];
+  document.getElementById('ovt').textContent=ST;
+  document.getElementById('ovs').textContent='Latest: '+(lat.display_date||lat.date)+' · '+mtd.length+' days MTD';
+  document.getElementById('ovk').innerHTML=[
+    {l:'Total Sales',v:fm(lat.total_sales),s:'MTD: '+fm(sm(mtd,'total_sales')),c:''},
+    {l:'Fuel Sales',v:fm(lat.fuel_sales),s:'MTD: '+fm(sm(mtd,'fuel_sales')),c:''},
+    {l:'Grocery / Inside',v:fm(lat.inside_sales),s:'MTD: '+fm(sm(mtd,'inside_sales')),c:''},
+    {l:'Lottery Net',v:fd(lat.lottery_net),s:'MTD: '+fd(sm(mtd,'lottery_net').toFixed(2)),c:''},
+    {l:'Cash Drop',v:fm(lat.cash_drop),s:'MTD: '+fm(sm(mtd,'cash_drop')),c:''},
+    {l:'Over / Short',v:fd(lat.over_short),s:'MTD: '+fd(sm(mtd,'over_short').toFixed(2)),c:dc(lat.over_short)},
+  ].map(k=>`<div class="kp ${k.c}" onclick="oMod('${k.l} — MTD Detail',${JSON.stringify(mtd)})"><div class="kl">${k.l}</div><div class="kv">${k.v}</div><div class="ks">${k.s}</div><div class="kh">Click for details →</div></div>`).join('');
+  if(chts.ov)chts.ov.destroy();
+  const cv=document.getElementById('ovc');
+  if(cv&&mtd.length)chts.ov=new Chart(cv,{type:'bar',data:{labels:mtd.map(d=>(d.display_date||d.date).slice(0,5)),datasets:[{label:'Fuel',data:mtd.map(d=>parseFloat(d.fuel_sales)||0),backgroundColor:'rgba(59,130,246,.65)',borderRadius:3,stack:'s'},{label:'Grocery',data:mtd.map(d=>parseFloat(d.inside_sales)||0),backgroundColor:'rgba(74,222,128,.65)',borderRadius:3,stack:'s'},{label:'Lottery',data:mtd.map(d=>Math.max(0,parseFloat(d.lottery_net)||0)),backgroundColor:'rgba(250,204,21,.65)',borderRadius:3,stack:'s'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.dataset.label}: $${c.raw.toFixed(2)}`}}},scales:{x:{ticks:{color:'#94a3b8',font:{size:9},maxRotation:45},grid:{color:'rgba(51,65,85,.4)'}},y:{ticks:{color:'#94a3b8',font:{size:9},callback:v=>'$'+v.toLocaleString()},grid:{color:'rgba(51,65,85,.4)'}}}}});
+  document.getElementById('ovml').textContent=mtd.length+' days';
+  document.getElementById('ovtb').innerHTML=dTbl(mtd.slice().reverse());
+}
+function rOps(){
+  bTL('opstl','rOps');const d=flt(gdays());
+  if(!d.length){document.getElementById('opsk').innerHTML=noD(4);document.getElementById('opsal').innerHTML='';document.getElementById('opstb').innerHTML=noT();return;}
+  const tD=sm(d,'over_short'),aD=av(d,'over_short'),worst=d.reduce((a,b)=>Math.abs(parseFloat(a.over_short)||0)>Math.abs(parseFloat(b.over_short)||0)?a:b),aDs=d.filter(x=>Math.abs(parseFloat(x.over_short)||0)>50).length;
+  document.getElementById('opsk').innerHTML=[
+    {l:'Total Over/Short',v:fd(tD.toFixed(2)),s:d.length+' days',c:dc(tD)},
+    {l:'Avg / Day',v:fd(aD.toFixed(2)),s:'daily average',c:dc(aD)},
+    {l:'Worst Day',v:fd(worst.over_short),s:worst.display_date||worst.date,c:dc(worst.over_short)},
+    {l:'Alert Days',v:`<span style="font-size:24px;font-weight:700">${aDs}</span>`,s:'|diff| > $50',c:aDs>3?'bd':aDs>1?'wd':'gd'},
+  ].map(k=>`<div class="kp ${k.c}"><div class="kl">${k.l}</div><div class="kv">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  const als=d.filter(x=>Math.abs(parseFloat(x.over_short)||0)>50).sort((a,b)=>Math.abs(parseFloat(b.over_short))-Math.abs(parseFloat(a.over_short)));
+  document.getElementById('opsal').innerHTML=als.length?`<div class="als">${als.map(a=>{const n=parseFloat(a.over_short),big=Math.abs(n)>200;return`<div class="ai ${big?'cr':'wn'}"><div class="aico ${big?'r':'y'}">${n<0?'▼':'▲'}</div><div class="ain"><div class="at">${ST}</div><div class="am">${a.display_date||a.date} · Total: ${fm(a.total_sales)} · Drop: ${fm(a.cash_drop)}</div></div><div class="av ${n<0?'neg':'pos'}">${n>=0?'+':'-'}$${Math.abs(n).toFixed(2)}</div></div>`;}).join('')}</div>`:`<div style="padding:16px 0;color:var(--grn);font-size:14px">✓ No significant variances for this period</div>`;
+  document.getElementById('opstb').innerHTML=dTbl(d.slice().reverse());
+}
+function rSal(){
+  bTL('saltl','rSal');const d=flt(gdays());
+  if(!d.length){['salk','lotk'].forEach(id=>document.getElementById(id).innerHTML=noD(4));['saltb','lottb'].forEach(id=>document.getElementById(id).innerHTML=noT());return;}
+  const tT=sm(d,'total_sales'),tF=sm(d,'fuel_sales'),tG=sm(d,'inside_sales');
+  document.getElementById('salk').innerHTML=[
+    {l:'Total Sales',v:fm(tT),s:d.length+' days',c:''},
+    {l:'Fuel',v:fm(tF),s:pc(tF,tT)+' of total',c:''},
+    {l:'Grocery / Inside',v:fm(tG),s:pc(tG,tT)+' of total',c:''},
+    {l:'Avg Daily Sales',v:fm(av(d,'total_sales')),s:'per day',c:''},
+  ].map(k=>`<div class="kp ${k.c}"><div class="kl">${k.l}</div><div class="kv">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  document.getElementById('saltb').innerHTML=`<table><thead><tr><th style="text-align:left">Date</th><th>Total</th><th>Fuel</th><th>Fuel %</th><th>Grocery</th><th>Grocery %</th></tr></thead><tbody>${d.slice().reverse().map(x=>{const fp=x.total_sales?(parseFloat(x.fuel_sales)/parseFloat(x.total_sales)*100).toFixed(1):'—',gp=x.total_sales?(parseFloat(x.inside_sales)/parseFloat(x.total_sales)*100).toFixed(1):'—';return`<tr><td>${x.display_date||x.date}</td><td>${fm(x.total_sales)}</td><td>${fm(x.fuel_sales)}</td><td><span class="bdg bn">${fp}%</span></td><td>${fm(x.inside_sales)}</td><td><span class="bdg bn">${gp}%</span></td></tr>`;}).join('')}</tbody><tfoot><tr><td>Total</td><td>${fm(tT)}</td><td>${fm(tF)}</td><td><span class="bdg bn">${pc(tF,tT)}</span></td><td>${fm(tG)}</td><td><span class="bdg bn">${pc(tG,tT)}</span></td></tr></tfoot></table>`;
+  const tL=sm(d,'lottery_net'),best=d.reduce((a,b)=>(parseFloat(a.lottery_net)||0)>(parseFloat(b.lottery_net)||0)?a:b),nD=d.filter(x=>(parseFloat(x.lottery_net)||0)<0).length;
+  document.getElementById('lotk').innerHTML=[
+    {l:'Lottery Net',v:fd(tL.toFixed(2)),s:d.length+' days',c:tL>=0?'gd':'bd'},
+    {l:'Avg Net / Day',v:fd(av(d,'lottery_net').toFixed(2)),s:'daily average',c:''},
+    {l:'Best Day',v:fm(best.lottery_net),s:best.display_date||best.date,c:'gd'},
+    {l:'Negative Days',v:`<span style="font-size:24px;font-weight:700">${nD}</span>`,s:'net loss days',c:nD>5?'bd':nD>2?'wd':'gd'},
+  ].map(k=>`<div class="kp ${k.c}"><div class="kl">${k.l}</div><div class="kv">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  document.getElementById('lottb').innerHTML=`<table><thead><tr><th style="text-align:left">Date</th><th>Lottery Net</th><th>% of Total Sales</th></tr></thead><tbody>${d.slice().reverse().map(x=>{const p=x.total_sales?(parseFloat(x.lottery_net)/parseFloat(x.total_sales)*100).toFixed(1):'—',n=parseFloat(x.lottery_net),bc=n<-100?'br':n>200?'bg':'bn';return`<tr><td>${x.display_date||x.date}</td><td>${fd(x.lottery_net)}</td><td><span class="bdg ${bc}">${p}%</span></td></tr>`;}).join('')}</tbody><tfoot><tr><td>Total</td><td>${fd(tL.toFixed(2))}</td><td><span class="bdg bn">${pc(tL,tT)}</span></td></tr></tfoot></table>`;
+}
+function rFin(){
+  bTL('fintl','rFin');const d=flt(gdays());
+  if(!d.length){document.getElementById('finsr').innerHTML='';document.getElementById('fintb').innerHTML=noT();return;}
+  const ks=['total_sales','fuel_sales','inside_sales','lottery_net','cash_drop','over_short'],ls=['Total Sales','Fuel','Grocery','Lottery Net','Cash Drop','Over/Short'];
+  document.getElementById('finsr').innerHTML=ks.map((k,i)=>{const v=sm(d,k),sig=k==='over_short'||k==='lottery_net';return`<div class="st-b"><div class="sl">${ls[i]}</div><div class="sv">${sig?fd(v.toFixed(2)):fm(v)}</div></div>`;}).join('');
+  document.getElementById('fintb').innerHTML=dTbl(d.slice().reverse());
+}
+function rChg(){
+  if(!D)return;
+  const t=tod(),st=t.slice(0,7)+'-01';
+  document.getElementById('cgr').innerHTML=STS.map(s=>{
+    const d=(D.stores[s]&&D.stores[s].days||[]).filter(x=>x.date>=st&&x.date<=t);
+    if(!d.length)return`<div class="cc2${s===ST?' sel':''}"><div class="csn" style="${s===ST?'color:#60a5fa':''}">${s}${s===ST?' ●':''}</div><div style="color:var(--tx3);font-size:14px">No data</div></div>`;
+    const tot=sm(d,'total_sales'),f=sm(d,'fuel_sales'),g=sm(d,'inside_sales'),l=sm(d,'lottery_net'),df=sm(d,'over_short'),lat=d[d.length-1];
+    return`<div class="cc2${s===ST?' sel':''}"><div class="csn" style="${s===ST?'color:#60a5fa':''}">${s}${s===ST?' ●':''}</div><div class="ctot">${fm(tot)}</div><div class="crow"><span class="cl">Fuel</span><span class="cv">${fm(f)}</span></div><div class="crow"><span class="cl">Grocery</span><span class="cv">${fm(g)}</span></div><div class="crow"><span class="cl">Lottery Net</span><span class="cv">${fd(l.toFixed(2))}</span></div><div class="crow"><span class="cl">Over/Short</span><span class="cv">${fd(df.toFixed(2))}</span></div><div class="crow"><span class="cl">Days</span><span class="cv" style="color:var(--tx3)">${d.length}</span></div><div class="crow"><span class="cl">Latest</span><span class="cv" style="color:var(--tx3)">${lat.display_date||lat.date}</span></div></div>`;
+  }).join('');
+  const ad={};
+  STS.forEach(s=>(D.stores[s]&&D.stores[s].days||[]).filter(x=>x.date>=st&&x.date<=t).forEach(d=>{if(!ad[d.date])ad[d.date]={date:d.date,disp:d.display_date||d.date};ad[d.date][s]=d;}));
+  const srt=Object.keys(ad).sort().reverse();
+  if(!srt.length){document.getElementById('ctb').innerHTML=noT();return;}
+  document.getElementById('ctb').innerHTML=`<table><thead><tr><th style="text-align:left">Date</th>${STS.map(s=>`<th colspan="2" style="text-align:center;border-left:1px solid var(--bd)">${s}</th>`).join('')}</tr><tr><th></th>${STS.map(()=>'<th>Total</th><th>Over/Short</th>').join('')}</tr></thead><tbody>${srt.map(dt=>{const row=ad[dt];return`<tr><td>${row.disp}</td>${STS.map(s=>{const x=row[s];return x?`<td>${fm(x.total_sales)}</td><td>${fd(x.over_short)}</td>`:`<td style="color:var(--tx4)">—</td><td style="color:var(--tx4)">—</td>`;}).join('')}</tr>`;}).join('')}</tbody><tfoot><tr><td>Total</td>${STS.map(s=>{const d=(D.stores[s]&&D.stores[s].days||[]).filter(x=>x.date>=st&&x.date<=t);return`<td>${fm(sm(d,'total_sales'))}</td><td>${fd(sm(d,'over_short').toFixed(2))}</td>`;}).join('')}</tr></tfoot></table>`;
+}
+function oMod(title,d){mD=Array.isArray(d)?d.slice():[];sK=null;sDir='desc';document.getElementById('mtl').textContent=title;document.getElementById('msi').value='';rMod(mD);document.getElementById('mod').classList.add('on');}
+function rMod(d){document.getElementById('mbd').innerHTML=dTbl(d.slice().reverse());}
+function fMod(){const q=document.getElementById('msi').value.trim().toLowerCase();rMod(q?mD.filter(d=>Object.values(d).some(v=>String(v).toLowerCase().includes(q))):mD);}
+function sCol(k){if(sK===k)sDir=sDir==='asc'?'desc':'asc';else{sK=k;sDir='desc';}const q=document.getElementById('msi')?.value?.trim().toLowerCase()||'';let d=q?mD.filter(x=>Object.values(x).some(v=>String(v).toLowerCase().includes(q))):mD.slice();d.sort((a,b)=>{const va=parseFloat(a[k])||0,vb=parseFloat(b[k])||0;return sDir==='asc'?va-vb:vb-va;});rMod(d);}
+function expCSV(){if(!mD.length)return;const c=['display_date','total_sales','fuel_sales','inside_sales','lottery_net','cash_drop','over_short'],h=['Date','Total Sales','Fuel','Grocery','Lottery Net','Cash Drop','Over/Short'],csv=[h.join(','),...mD.map(d=>c.map(k=>d[k]||'').join(','))].join('\n'),a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download=ST.replace(/\s/g,'_')+'_export.csv';a.click();}
+function cMod(){document.getElementById('mod').classList.remove('on');}
+document.getElementById('mod').addEventListener('click',e=>{if(e.target===document.getElementById('mod'))cMod();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')cMod();});
+
+// ── REFRESH / GITHUB ACTIONS TRIGGER ─────────────────────────────────────────
+// Config — update REPO_OWNER and REPO_NAME to match your GitHub
+const GH_OWNER = 'philipdesmond20-png';
+const GH_REPO  = 'mercury-automation';
+const GH_WORKFLOW = 'collect.yml';
+
+// PAT is stored in localStorage (user sets it once in settings)
+// We never hardcode it in source code
+function getGHToken() { return localStorage.getItem('gh_pat') || ''; }
+
+function showToast(msg, type='info', duration=4000) {
+  const t = document.getElementById('refreshToast');
+  t.textContent = msg;
+  t.className = 'refresh-toast show ' + type;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), duration);
+}
+
+async function triggerRefresh() {
+  const token = getGHToken();
+  if (!token) {
+    // Show PAT input prompt
+    const pat = prompt('Enter your GitHub Personal Access Token (stored locally, never sent to server):\n\nCreate one at: github.com → Settings → Developer settings → Personal access tokens\nRequired scope: repo + workflow');
+    if (!pat) return;
+    localStorage.setItem('gh_pat', pat.trim());
+  }
+
+  const btn = document.getElementById('refreshBtn');
+  const icon = document.getElementById('refreshIcon');
+  btn.disabled = true;
+  btn.classList.add('running');
+  icon.className = 'spin-icon';
+  icon.textContent = '↻';
+  showToast('⚡ Triggering data collection...', 'info', 30000);
+
+  try {
+    // Trigger the workflow
+    const res = await fetch(
+      `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': 'token ' + getGHToken(),
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ref: 'main' })
+      }
+    );
+
+    if (res.status === 204) {
+      showToast('✓ Collection started — checking for new data...', 'info', 60000);
+      pollForNewData();
+    } else if (res.status === 401) {
+      localStorage.removeItem('gh_pat');
+      showToast('✗ Invalid token — click Refresh to enter a new one', 'error');
+      resetRefreshBtn();
+    } else {
+      showToast('✗ Failed to trigger workflow: ' + res.status, 'error');
+      resetRefreshBtn();
+    }
+  } catch(e) {
+    showToast('✗ Network error: ' + e.message, 'error');
+    resetRefreshBtn();
+  }
+}
+
+function resetRefreshBtn() {
+  const btn = document.getElementById('refreshBtn');
+  const icon = document.getElementById('refreshIcon');
+  btn.disabled = false;
+  btn.classList.remove('running');
+  icon.className = '';
+  icon.textContent = '↻';
+}
+
+async function pollForNewData() {
+  // Poll every 15 seconds for up to 5 minutes
+  // Compare the "generated" date in latest.json to detect update
+  const currentGenerated = D ? D.generated : null;
+  const maxAttempts = 20; // 20 × 15s = 5 minutes
+  let attempts = 0;
+
+  const poll = async () => {
+    attempts++;
+    try {
+      // Bust cache with timestamp
+      const res = await fetch('./data/latest.json?t=' + Date.now());
+      if (res.ok) {
+        const newData = await res.json();
+        if (newData.generated !== currentGenerated) {
+          // New data available!
+          D = newData;
+          renderAll();
+          sSB('live', D.generated);
+          showToast('✓ Data updated to ' + D.generated, 'success', 5000);
+          resetRefreshBtn();
+          return;
+        }
+      }
+    } catch(e) {}
+
+    if (attempts < maxAttempts) {
+      const remaining = Math.round((maxAttempts - attempts) * 15 / 60);
+      showToast(`⏳ Collecting data... (~${remaining} min remaining)`, 'info', 20000);
+      setTimeout(poll, 15000);
+    } else {
+      showToast('⏱ Timed out — workflow may still be running. Refresh the page in a few minutes.', 'error', 8000);
+      resetRefreshBtn();
+    }
+  };
+
+  // First poll after 30 seconds (workflow needs time to start)
+  setTimeout(poll, 30000);
+}
+
+init();
+</script>
+</body>
+</html>
