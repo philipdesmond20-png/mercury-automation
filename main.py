@@ -1,198 +1,240 @@
-"""
-Mercury POS — Fast HTTP Collector (no browser)
-================================================
-Logs in via HTTP, pulls searchDays data for current month,
-writes directly to data/latest.json — no database needed.
-~15-20 seconds total.
-"""
-
-import os, json, re, time, requests
-from pathlib import Path
-from datetime import datetime
+import os
+import io
+import csv
+import json
+import requests
+import gspread
+from google.oauth2.service_account import Credentials
+from playwright.sync_api import sync_playwright
 
 BASE_URL = "https://monecloud.aboveo.com"
+SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
 
-STORES = [
-    {"name": "Texaco",   "username": os.environ["STORE_TEXACO_USERNAME"],  "password": os.environ["STORE_TEXACO_PASSWORD"]},
-    {"name": "Dalton",   "username": os.environ["STORE_DALTON_USERNAME"],  "password": os.environ["STORE_DALTON_PASSWORD"]},
-    {"name": "Rome KS3", "username": os.environ["STORE_ROME_USERNAME"],    "password": os.environ["STORE_ROME_PASSWORD"]},
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
 
-def log(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-def make_session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    return s
+def log(msg):
+    print(msg, flush=True)
 
-def login(session, username, password):
-    try:
-        session.get(f"{BASE_URL}/shifts/index", timeout=30)
-        r = session.post(
-            f"{BASE_URL}/user/authenticateLogin/loginForm",
-            data={"loginUserName": username, "loginPassword": password},
-            headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Referer": f"{BASE_URL}/user/homepage"},
-            timeout=30, allow_redirects=True
-        )
-        if "logout" in r.text.lower() or "loginUserName" not in r.text:
-            log(f"  Login OK (url={r.url})")
-            return True
-        r2 = session.get(f"{BASE_URL}/shifts/index", timeout=30)
-        if "loginUserName" not in r2.text:
-            log(f"  Login OK via redirect check")
-            return True
-        log(f"  Login FAILED")
-        return False
-    except Exception as e:
-        log(f"  Login error: {e}")
-        return False
 
-def search_days(session, month, year, start_date, end_date):
-    try:
-        r = session.post(
-            f"{BASE_URL}/shifts/searchDays",
-            data={"month": month, "year": year, "startDate": start_date, "endDate": end_date},
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": f"{BASE_URL}/shifts/index",
-            },
-            timeout=30
-        )
-        if r.status_code == 200:
-            return r.text
-        log(f"  searchDays returned {r.status_code}")
-        return None
-    except Exception as e:
-        log(f"  searchDays error: {e}")
-        return None
+def get_google_client():
+    creds_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    return gspread.authorize(creds)
 
-def parse_search_days(html):
-    """
-    Parse the searchDays HTML response into a list of day dicts.
-    Tries to extract date, total_sales, fuel_sales, inside_sales,
-    lottery_net, cash_drop, over_short from table rows.
-    """
-    days = []
-    if not html:
-        return days
 
-    # Find all table rows
-    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
-    
-    for row in rows:
-        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-        cells = [re.sub(r'<[^>]+>', '', c).strip().replace(',', '').replace('$', '') for c in cells]
-        cells = [c for c in cells if c]  # remove empty
-        
-        if len(cells) < 3:
-            continue
-        
-        # First cell should be a date MM/DD/YYYY
-        date_match = re.match(r'(\d{2}/\d{2}/\d{4})', cells[0])
-        if not date_match:
-            continue
-        
-        display_date = date_match.group(1)
-        # Convert MM/DD/YYYY to YYYY-MM-DD
-        parts = display_date.split('/')
-        iso_date = f"{parts[2]}-{parts[0]}-{parts[1]}"
-        
-        def safe_float(v):
-            try:
-                v = v.replace('(', '-').replace(')', '').strip()
-                return float(v)
-            except:
-                return 0.0
-        
-        # Column order varies — try to map by position
-        # Typical: Date, TotalSales, FuelSales, InsideSales, LotteryNet, CashDrop, Difference
-        day = {
-            "date": iso_date,
-            "display_date": display_date,
-            "total_sales": safe_float(cells[1]) if len(cells) > 1 else 0,
-            "fuel_sales":  safe_float(cells[2]) if len(cells) > 2 else 0,
-            "inside_sales":safe_float(cells[3]) if len(cells) > 3 else 0,
-            "lottery_net": safe_float(cells[4]) if len(cells) > 4 else 0,
-            "cash_drop":   safe_float(cells[5]) if len(cells) > 5 else 0,
-            "over_short":  safe_float(cells[6]) if len(cells) > 6 else 0,
+def save_text(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def save_bytes(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def save_debug(page, store_name, suffix):
+    page.screenshot(path=f"{store_name}{suffix}.png", full_page=True)
+    save_text(f"{store_name}{suffix}.html", page.content())
+    save_text(f"{store_name}{suffix}.txt", page.locator("body").inner_text())
+
+
+def parse_csv_text(csv_text):
+    attempts = [
+        csv.reader(io.StringIO(csv_text)),
+        csv.reader(io.StringIO(csv_text), delimiter="\t"),
+        csv.reader(io.StringIO(csv_text), delimiter=";"),
+    ]
+
+    best_rows = []
+    best_width = 0
+
+    for reader in attempts:
+        rows = list(reader)
+        width = max((len(r) for r in rows), default=0)
+        if width > best_width:
+            best_rows = rows
+            best_width = width
+
+    if not best_rows:
+        return [[""]]
+
+    for r in best_rows:
+        if len(r) < best_width:
+            r.extend([""] * (best_width - len(r)))
+
+    return best_rows
+
+
+def build_store_block(store_name, csv_text):
+    rows = parse_csv_text(csv_text)
+    block = []
+    block.append(["STORE", store_name])
+    block.append([""])
+    block.extend(rows)
+    block.append([""])
+    block.append([""])
+    return block
+
+
+def upload_combined_to_raw_csv(all_rows):
+    log("Uploading combined data to RAW_CSV")
+    gc = get_google_client()
+    sh = gc.open_by_key(SHEET_ID)
+    ws = sh.worksheet("RAW_CSV")
+    ws.clear()
+    ws.update("A1", all_rows)
+    log("RAW_CSV updated")
+
+
+def trigger_fill(store_name):
+    url = os.environ["APPS_SCRIPT_URL"]
+    log(f"Triggering Apps Script for {store_name}")
+    r = requests.get(url, params={"store": store_name}, timeout=60)
+    log(f"Apps Script response for {store_name}: {r.status_code}")
+
+
+def get_latest_shift_date(page, store_name):
+    page.wait_for_timeout(4000)
+    save_debug(page, store_name, "_sales_day")
+
+    js = """
+    () => {
+        const rows = Array.from(document.querySelectorAll("#dayResultsTable tbody tr"));
+        const dates = [];
+
+        for (const row of rows) {
+            const firstCell = row.querySelector("td");
+            if (!firstCell) continue;
+            const txt = (firstCell.innerText || "").trim();
+            if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(txt)) {
+                dates.push(txt);
+            }
         }
-        days.append(day)
-    
-    log(f"  Parsed {len(days)} days from HTML")
-    return days
 
-def collect_store(store):
-    log(f"\n{'='*40}\n{store['name']}\n{'='*40}")
-    start_time = time.time()
-    
-    session = make_session()
-    
-    if not login(session, store["username"], store["password"]):
-        return None
-    
-    now = datetime.now()
-    month     = now.strftime("%B")
-    year      = now.strftime("%Y")
-    start_dt  = now.strftime("%m/01/%Y")
-    end_dt    = now.strftime("%m/%d/%Y")
-    
-    log(f"  Fetching {month} {year} ({start_dt} - {end_dt})")
-    html = search_days(session, month, year, start_dt, end_dt)
-    
-    if not html:
-        log(f"  No data returned")
-        return None
-    
-    days = parse_search_days(html)
-    
-    # Also try last month if we're early in the month
-    if now.day <= 5:
-        import calendar
-        last = now.replace(day=1) - __import__('datetime').timedelta(days=1)
-        lm_html = search_days(session, last.strftime("%B"), last.strftime("%Y"),
-                              last.strftime("%m/01/%Y"), last.strftime("%m/%d/%Y"))
-        if lm_html:
-            last_days = parse_search_days(lm_html)
-            days = last_days + days
-    
-    days.sort(key=lambda d: d["date"])
-    log(f"  {store['name']}: {len(days)} days collected in {round(time.time()-start_time,1)}s")
-    return days
+        return {
+            dates,
+            firstDate: dates.length ? dates[0] : null,
+            tableHtml: document.querySelector("#dayResultsTable") ? document.querySelector("#dayResultsTable").outerHTML.slice(0, 4000) : null
+        };
+    }
+    """
+
+    result = page.evaluate(js)
+    save_text(f"{store_name}_date_debug.json", json.dumps(result, indent=2))
+
+    picked = result.get("firstDate")
+    if not picked:
+        raise Exception(f"No report date found for {store_name}")
+
+    log(f"{store_name}: latest shift date = {picked}")
+    return picked
+
+
+def download_csv_via_browser(page, store_name, shift_date):
+    log(f"{store_name}: invoking browser downloadCSV('{shift_date}')")
+
+    if not page.evaluate("() => typeof downloadCSV === 'function'"):
+        raise Exception(f"{store_name}: downloadCSV function is not available on page")
+
+    with page.expect_download(timeout=120000) as download_info:
+        page.evaluate("(date) => downloadCSV(date)", shift_date)
+
+    download = download_info.value
+    suggested_name = download.suggested_filename
+    log(f"{store_name}: browser download started: {suggested_name}")
+
+    temp_path = download.path()
+    if not temp_path:
+        raise Exception(f"{store_name}: download path not available")
+
+    with open(temp_path, "rb") as f:
+        raw_bytes = f.read()
+
+    save_bytes(f"{store_name}_downloaded.bin", raw_bytes)
+
+    text = None
+    for enc in ["utf-8-sig", "utf-8", "latin-1"]:
+        try:
+            text = raw_bytes.decode(enc)
+            break
+        except Exception:
+            continue
+
+    if text is None:
+        raise Exception(f"{store_name}: could not decode downloaded file")
+
+    save_text(f"{store_name}_raw.csv", text)
+
+    if "<html" in text.lower() or "<!doctype html" in text.lower():
+        save_text(f"{store_name}_raw_response.html", text)
+        raise Exception(f"{store_name}: downloaded HTML instead of CSV")
+
+    if not text.strip():
+        raise Exception(f"{store_name}: downloaded file is empty")
+
+    log(f"{store_name}: saved proper CSV download")
+    return text
+
+
+def login_and_fetch_csv(playwright, store_name, username, password):
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context(accept_downloads=True)
+    page = context.new_page()
+
+    try:
+        log(f"Running {store_name}")
+
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
+
+        page.fill('input[name="loginUserName"]', username)
+        page.fill('input[name="loginPassword"]', password)
+
+        with page.expect_navigation(wait_until="networkidle", timeout=120000):
+            page.click("#submitButton")
+
+        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
+
+        page.click("text=Sales - Day")
+        page.wait_for_timeout(5000)
+
+        page.wait_for_selector("#dayResultsTable", timeout=120000)
+        page.wait_for_function("() => typeof downloadCSV === 'function'", timeout=120000)
+
+        shift_date = get_latest_shift_date(page, store_name)
+        csv_text = download_csv_via_browser(page, store_name, shift_date)
+
+        return csv_text
+
+    finally:
+        context.close()
+        browser.close()
+
 
 def main():
-    log("Mercury POS Fast HTTP Collector starting...")
-    today = datetime.now().strftime("%Y-%m-%d")
-    output = {"generated": today, "stores": {}}
-    
-    success, failed = [], []
-    
-    for store in STORES:
-        days = collect_store(store)
-        if days is not None:
-            output["stores"][store["name"]] = {"days": days}
-            success.append(store["name"])
-        else:
-            output["stores"][store["name"]] = {"days": []}
-            failed.append(store["name"])
-    
-    # Save to data/
-    Path("data").mkdir(exist_ok=True)
-    Path("data/latest.json").write_text(json.dumps(output))
-    Path(f"data/{today}.json").write_text(json.dumps(output))
-    
-    total_days = sum(len(v["days"]) for v in output["stores"].values())
-    log(f"\nExported data/latest.json — {total_days} total days")
-    log(f"SUCCESS: {success}")
-    log(f"FAILED:  {failed}")
-    
-    if failed and not success:
-        raise Exception("All stores failed")
+    stores = [
+        ("Texaco", os.environ["STORE_TEXACO_USERNAME"], os.environ["STORE_TEXACO_PASSWORD"]),
+        ("Dalton", os.environ["STORE_DALTON_USERNAME"], os.environ["STORE_DALTON_PASSWORD"]),
+        ("Rome KS3", os.environ["STORE_ROME_USERNAME"], os.environ["STORE_ROME_PASSWORD"]),
+    ]
+
+    combined_rows = []
+
+    with sync_playwright() as playwright:
+        for store_name, username, password in stores:
+            csv_text = login_and_fetch_csv(playwright, store_name, username, password)
+            combined_rows.extend(build_store_block(store_name, csv_text))
+
+    upload_combined_to_raw_csv(combined_rows)
+
+    for store_name, _, _ in stores:
+        trigger_fill(store_name)
+
+    log("All stores completed successfully")
+
 
 if __name__ == "__main__":
     main()
