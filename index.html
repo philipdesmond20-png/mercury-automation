@@ -211,7 +211,24 @@ function bNav(){document.querySelectorAll('.tab').forEach(b=>{b.addEventListener
 function iso(d){return d.toISOString().slice(0,10);}
 function tod(){return iso(new Date());}
 function gdays(){return(D&&D.stores[ST]&&D.stores[ST].days)||[];}
-function flt(a){const t=tod();if(rng==='today')return a.filter(d=>d.date===t);if(rng==='yesterday')return a.filter(d=>d.date===iso(new Date(Date.now()-86400000)));if(rng==='month')return a.filter(d=>d.date>=t.slice(0,7)+'-01'&&d.date<=t);if(rng==='lastmonth'){const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-1);const s=iso(x),e=iso(new Date(x.getFullYear(),x.getMonth()+1,0));return a.filter(d=>d.date>=s&&d.date<=e);}if(rng==='custom'&&cS&&cE)return a.filter(d=>d.date>=cS&&d.date<=cE);return a;}
+function latestDate(a){if(!a.length)return null;return a.reduce((m,d)=>d.date>m?d.date:m,a[0].date);}
+function flt(a){
+  const t=tod();
+  if(rng==='today'){const r=a.filter(d=>d.date===t);if(r.length)return r;// fallback to latest available
+    const ld=latestDate(a);return ld?a.filter(d=>d.date===ld):[];}
+  if(rng==='yesterday'){const y=iso(new Date(Date.now()-86400000));const r=a.filter(d=>d.date===y);if(r.length)return r;// fallback to second latest
+    const dates=[...new Set(a.map(d=>d.date))].sort().reverse();return dates[1]?a.filter(d=>d.date===dates[1]):a.filter(d=>d.date===dates[0]);}
+  if(rng==='month'){
+    // Try current month first, fallback to latest month in data
+    const r=a.filter(d=>d.date>=t.slice(0,7)+'-01'&&d.date<=t);
+    if(r.length)return r;
+    const ld=latestDate(a);if(!ld)return[];
+    return a.filter(d=>d.date>=ld.slice(0,7)+'-01'&&d.date<=ld);}
+  if(rng==='lastmonth'){const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-1);const s=iso(x),e=iso(new Date(x.getFullYear(),x.getMonth()+1,0));const r=a.filter(d=>d.date>=s&&d.date<=e);if(r.length)return r;// fallback to month before latest
+    const ld=latestDate(a);if(!ld)return[];const lx=new Date(ld);lx.setDate(1);lx.setMonth(lx.getMonth()-1);const ls=iso(lx),le=iso(new Date(lx.getFullYear(),lx.getMonth()+1,0));return a.filter(d=>d.date>=ls&&d.date<=le);}
+  if(rng==='custom'&&cS&&cE)return a.filter(d=>d.date>=cS&&d.date<=cE);
+  return a;
+}
 function bTL(id,fn){const ps=[{k:'today',l:'Today'},{k:'yesterday',l:'Yesterday'},{k:'month',l:'This Month'},{k:'lastmonth',l:'Last Month'}];document.getElementById(id).innerHTML=ps.map(p=>`<button class="pb ${rng===p.k?'on':''}" onclick="sR('${p.k}','${fn}')">${p.l}</button>`).join('')+`<input type="date" id="${id}S" value="${cS||''}"><input type="date" id="${id}E" value="${cE||''}"><button class="ab" onclick="aC('${id}','${fn}')">Apply</button>`;}
 function sR(r,fn){rng=r;window[fn]();}
 function aC(id,fn){const s=document.getElementById(id+'S').value,e=document.getElementById(id+'E').value;if(s&&e&&s<=e){cS=s;cE=e;rng='custom';}window[fn]();}
@@ -232,9 +249,14 @@ function dTbl(arr){
 function rAll(){rOv();rOps();rSal();rFin();rChg();}
 function rOv(){
   const d=gdays();if(!d.length)return;
-  const t=tod(),mtd=d.filter(x=>x.date>=t.slice(0,7)+'-01'&&x.date<=t),lat=d[d.length-1];
+  const t=tod();
+  const lat=d[d.length-1];
+  const ld=lat.date; // latest date in data
+  // Use latest available month for MTD
+  const mtd=d.filter(x=>x.date>=ld.slice(0,7)+'-01'&&x.date<=ld);
   document.getElementById('ovt').textContent=ST;
-  document.getElementById('ovs').textContent='Latest: '+(lat.display_date||lat.date)+' · '+mtd.length+' days MTD';
+  const isStale=ld<t;
+  document.getElementById('ovs').textContent='Latest: '+(lat.display_date||lat.date)+(isStale?' (last available)':'')+' · '+mtd.length+' days MTD';
   document.getElementById('ovk').innerHTML=[
     {l:'Total Sales',v:fm(lat.total_sales),s:'MTD: '+fm(sm(mtd,'total_sales')),c:''},
     {l:'Fuel Sales',v:fm(lat.fuel_sales),s:'MTD: '+fm(sm(mtd,'fuel_sales')),c:''},
