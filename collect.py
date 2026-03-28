@@ -1,17 +1,16 @@
 """
-Mercury POS — Data Collector v2
-=================================
-Logs into each store, pulls all data from searchDays (full month),
-plus detailed endpoints for each day. Stores everything in SQLite.
+Mercury POS — Fast Dashboard Data Collector
+=============================================
+Separate from main.py (Google Sheets fill).
+This script ONLY updates data/latest.json for the dashboard.
+Uses HTTP requests — no browser, ~15 seconds.
 """
 
-import os, json, sqlite3, time, re
-from datetime import datetime, timedelta
+import os, json, re, time, requests
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from datetime import datetime
 
 BASE_URL = "https://monecloud.aboveo.com"
-DB_PATH  = "mercury.db"
 
 STORES = [
     {"name": "Texaco",   "username": os.environ["STORE_TEXACO_USERNAME"],  "password": os.environ["STORE_TEXACO_PASSWORD"]},
@@ -21,260 +20,134 @@ STORES = [
 
 def log(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-def money(v):
-    if not v: return None
-    s = str(v).replace('$','').replace(',','').replace('\xa0','').strip()
-    negative = '(' in s
-    s = s.replace('(','').replace(')','').strip()
+def make_session():
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    return s
+
+def login(session, username, password):
     try:
-        val = float(s)
-        return -val if negative else val
-    except: return None
-
-# ══════════════════════════════════════════════════════════════
-# DATABASE
-# ══════════════════════════════════════════════════════════════
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-def init_db():
-    conn = get_db()
-    conn.executescript(Path("schema.sql").read_text())
-    conn.commit()
-    for s in STORES:
-        conn.execute("INSERT OR IGNORE INTO stores (name, username) VALUES (?,?)", (s["name"], s["username"]))
-    conn.commit()
-    conn.close()
-
-def get_store_id(conn, name):
-    return conn.execute("SELECT id FROM stores WHERE name=?", (name,)).fetchone()["id"]
-
-def get_or_create_shift(conn, store_id, shift_date, display_date=None):
-    row = conn.execute("SELECT id FROM shifts WHERE store_id=? AND shift_date=?", (store_id, shift_date)).fetchone()
-    if row: return row["id"]
-    cur = conn.execute("INSERT INTO shifts (store_id, shift_date, display_date) VALUES (?,?,?)", (store_id, shift_date, display_date))
-    conn.commit()
-    return cur.lastrowid
-
-def save_raw(conn, shift_id, endpoint, text):
-    conn.execute("INSERT OR REPLACE INTO raw_responses (shift_id, endpoint, response_text) VALUES (?,?,?)", (shift_id, endpoint, text))
-
-# ══════════════════════════════════════════════════════════════
-# PARSERS
-# ══════════════════════════════════════════════════════════════
-
-# Column indices in searchDays table
-COL = {
-    'date':0,'fuel_vol':1,'fuel':2,'grocery':3,'lottery':4,'lottery_payout':5,
-    'financial':6,'non_fuel':7,'tax':8,'total':9,'mop_ebt':10,
-    'local_credits':11,'local_payments':12,'paid_in_out':13,
-    'cash_drop':14,'atm_drop':15,'difference':16
-}
-
-def parse_search_days(html):
-    """Parse searchDays response — returns list of day dicts."""
-    tbody = re.search(r'<tbody>(.*?)</tbody>', html, re.DOTALL)
-    if not tbody: return []
-    days = []
-    for tr in re.findall(r'<tr[^>]*>(.*?)</tr>', tbody.group(1), re.DOTALL):
-        cells = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.DOTALL)
-        cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-        if len(cells) < 15: continue
-        date_str = cells[COL['date']]
-        if not re.match(r'\d{2}/\d{2}/\d{4}', date_str): continue
-        # Convert MM/DD/YYYY to YYYY-MM-DD
-        parts = date_str.split('/')
-        shift_date = f"{parts[2]}-{parts[0]}-{parts[1]}"
-        days.append({
-            'shift_date':      shift_date,
-            'display_date':    date_str,
-            'fuel':            money(cells[COL['fuel']]),
-            'grocery':         money(cells[COL['grocery']]),
-            'lottery':         money(cells[COL['lottery']]),
-            'lottery_payout':  money(cells[COL['lottery_payout']]),
-            'tax':             money(cells[COL['tax']]),
-            'total':           money(cells[COL['total']]),
-            'mop_ebt':         money(cells[COL['mop_ebt']]),
-            'cash_drop':       money(cells[COL['cash_drop']]),
-            'difference':      money(cells[COL['difference']]),
-            'paid_in_out':     money(cells[COL['paid_in_out']]),
-        })
-    return days
-
-def parse_fuel_html(html):
-    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
-    data = {}
-    for r in rows:
-        cells = [re.sub(r'<[^>]+>','',c).strip() for c in re.findall(r'<td[^>]*>(.*?)</td>', r, re.DOTALL)]
-        cells = [c for c in cells if c]
-        if len(cells) >= 3:
-            label = cells[0].upper()
-            if 'REGULAR' in label: data['regular_gal'] = money(cells[1]); data['regular_amt'] = money(cells[2])
-            elif 'DIESEL'  in label: data['diesel_gal']  = money(cells[1]); data['diesel_amt']  = money(cells[2])
-            elif 'PREM'    in label: data['super_gal']   = money(cells[1]); data['super_amt']   = money(cells[2])
-            elif 'MID'     in label: data['plus_gal']    = money(cells[1]); data['plus_amt']    = money(cells[2])
-            elif 'TOTAL'   in label: data['total_gal']   = money(cells[1]); data['total_amt']   = money(cells[2])
-    return data
-
-def parse_card_html(html):
-    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
-    data = {}
-    for r in rows:
-        cells = [re.sub(r'<[^>]+>','',c).strip() for c in re.findall(r'<td[^>]*>(.*?)</td>', r, re.DOTALL)]
-        cells = [c for c in cells if c and c != '\xa0']
-        if len(cells) >= 3:
-            label = cells[0].upper()
-            amt = money(cells[2]) or money(cells[1])
-            if 'CREDIT'     in label: data['credit']     = amt
-            elif 'DEBIT'    in label: data['debit']      = amt
-            elif 'MOBILE'   in label: data['mobile']     = amt
-            elif 'FOODSTAMP'in label or 'FOOD STAMP' in label: data['food_stamp'] = amt
-            elif 'COUPON'   in label: data['coupon']     = amt
-            elif 'MAN CRED' in label or 'MANUAL CARD' in label: data['manual_card'] = amt
-            elif 'MAN DEBIT'in label or 'MANUAL DEBIT' in label: data['manual_debit'] = amt
-            elif 'CASH'     in label: data['cash']       = amt
-    return data
-
-# ══════════════════════════════════════════════════════════════
-# API CALLER
-# ══════════════════════════════════════════════════════════════
-
-def post_api(page, endpoint, params):
-    try:
-        return page.evaluate(f"""
-            async () => {{
-                const r = await fetch('{BASE_URL}{endpoint}', {{
-                    method: 'POST',
-                    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-                    body: new URLSearchParams({json.dumps(params)})
-                }});
-                return await r.text();
-            }}
-        """)
+        session.get(f"{BASE_URL}/shifts/index", timeout=30)
+        r = session.post(
+            f"{BASE_URL}/user/authenticateLogin/loginForm",
+            data={"loginUserName": username, "loginPassword": password},
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": f"{BASE_URL}/user/homepage"},
+            timeout=30, allow_redirects=True
+        )
+        if "logout" in r.text.lower() or "loginUserName" not in r.text:
+            log(f"  Login OK")
+            return True
+        r2 = session.get(f"{BASE_URL}/shifts/index", timeout=30)
+        if "loginUserName" not in r2.text:
+            return True
+        log(f"  Login FAILED")
+        return False
     except Exception as e:
-        log(f"  Error {endpoint}: {e}")
+        log(f"  Login error: {e}")
+        return False
+
+def search_days(session, month, year, start_date, end_date):
+    try:
+        r = session.post(
+            f"{BASE_URL}/shifts/searchDays",
+            data={"month": month, "year": year, "startDate": start_date, "endDate": end_date},
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{BASE_URL}/shifts/index",
+            },
+            timeout=30
+        )
+        return r.text if r.status_code == 200 else None
+    except Exception as e:
+        log(f"  searchDays error: {e}")
         return None
 
-# ══════════════════════════════════════════════════════════════
-# STORE PROCESSOR
-# ══════════════════════════════════════════════════════════════
+def parse_search_days(html):
+    days = []
+    if not html:
+        return days
 
-def process_store(playwright, store, conn, target_date):
-    store_id = get_store_id(conn, store["name"])
-    log(f"\n{'='*50}\n{store['name']}\n{'='*50}")
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
+    for row in rows:
+        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+        cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+        cells = [c for c in cells if c]
 
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
-    page = context.new_page()
-    start = time.time()
+        if len(cells) < 3:
+            continue
 
-    try:
-        # Login
-        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=60000)
-        page.fill('input[name="loginUserName"]', store["username"])
-        page.fill('input[name="loginPassword"]', store["password"])
-        with page.expect_navigation(wait_until="networkidle", timeout=60000):
-            page.click("#submitButton")
-        page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=60000)
-        log(f"{store['name']}: logged in")
+        date_match = re.match(r'(\d{2}/\d{2}/\d{4})', cells[0])
+        if not date_match:
+            continue
 
-        month      = target_date.strftime("%B")
-        year       = target_date.strftime("%Y")
-        start_date = target_date.strftime("%m/01/%Y")
-        end_date   = target_date.strftime("%m/%d/%Y")
+        display_date = date_match.group(1)
+        parts = display_date.split('/')
+        iso_date = f"{parts[2]}-{parts[0]}-{parts[1]}"
 
-        # ── Pull full month via searchDays ──────────────────────────
-        html = post_api(page, "/shifts/searchDays", {
-            "month": month, "year": year,
-            "startDate": start_date, "endDate": end_date
-        })
+        def safe_float(v):
+            try:
+                v = v.replace(',', '').replace('$', '').replace('(', '-').replace(')', '').strip()
+                return float(v)
+            except:
+                return 0.0
 
-        if not html:
-            log(f"{store['name']}: searchDays failed"); return
+        # Log raw cells for first row to verify column order
+        if len(days) == 0:
+            log(f"  Sample row cells: {cells}")
 
-        days = parse_search_days(html)
-        log(f"{store['name']}: found {len(days)} days")
+        day = {
+            "date":         iso_date,
+            "display_date": display_date,
+            "total_sales":  safe_float(cells[1]) if len(cells) > 1 else 0,
+            "fuel_sales":   safe_float(cells[2]) if len(cells) > 2 else 0,
+            "inside_sales": safe_float(cells[3]) if len(cells) > 3 else 0,
+            "lottery_net":  safe_float(cells[4]) if len(cells) > 4 else 0,
+            "cash_drop":    safe_float(cells[5]) if len(cells) > 5 else 0,
+            "over_short":   safe_float(cells[6]) if len(cells) > 6 else 0,
+        }
+        days.append(day)
 
-        for day in days:
-            shift_id = get_or_create_shift(conn, store_id, day['shift_date'], day['display_date'])
-            save_raw(conn, shift_id, "searchDays", html)
+    log(f"  Parsed {len(days)} days")
+    return days
 
-            # Save financials from searchDays
-            conn.execute("""
-                INSERT OR REPLACE INTO financials
-                (shift_id, total_sales, fuel_sales, inside_sales, lottery_net, cash_drop, over_short)
-                VALUES (?,?,?,?,?,?,?)
-            """, (shift_id, day['total'], day['fuel'], day['grocery'],
-                  (day['lottery'] or 0) + (day['lottery_payout'] or 0),
-                  day['cash_drop'], day['difference']))
+def collect_store(store):
+    log(f"\n{'='*40}\n{store['name']}\n{'='*40}")
+    session = make_session()
+    if not login(session, store["username"], store["password"]):
+        return None
 
-        conn.commit()
+    now = datetime.now()
+    html = search_days(session, now.strftime("%B"), now.strftime("%Y"),
+                       now.strftime("%m/01/%Y"), now.strftime("%m/%d/%Y"))
+    if not html:
+        return None
 
-        # ── Pull detailed data for target date only ─────────────────
-        display_date = target_date.strftime("%m/%d/%Y")
-        shift_id = get_or_create_shift(conn, store_id,
-            target_date.strftime("%Y-%m-%d"), display_date)
-
-        # Fuel detail
-        html = post_api(page, "/shifts/getFuelDailySummary", {"shiftDate": display_date})
-        if html and '<table' in html:
-            save_raw(conn, shift_id, "getFuelDailySummary", html)
-            data = parse_fuel_html(html)
-            if data:
-                conn.execute("""
-                    INSERT OR REPLACE INTO fuel_summary
-                    (shift_id, regular_gal, regular_amt, diesel_gal, diesel_amt, total_gal, total_amt, raw_json)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (shift_id, data.get('regular_gal'), data.get('regular_amt'),
-                      data.get('diesel_gal'), data.get('diesel_amt'),
-                      data.get('total_gal'), data.get('total_amt'), json.dumps(data)))
-
-        # Card/tender detail
-        html = post_api(page, "/shifts/getDailyCardInfo", {"shiftDate": display_date})
-        if html and '<table' in html:
-            save_raw(conn, shift_id, "getDailyCardInfo", html)
-            data = parse_card_html(html)
-            if data:
-                conn.execute("""
-                    INSERT OR REPLACE INTO tenders
-                    (shift_id, credit, debit, mobile, food_stamp, coupon, manual_card, manual_debit, raw_json)
-                    VALUES (?,?,?,?,?,?,?,?,?)
-                """, (shift_id, data.get('credit'), data.get('debit'),
-                      data.get('mobile'), data.get('food_stamp'), data.get('coupon'),
-                      data.get('manual_card'), data.get('manual_debit'), json.dumps(data)))
-
-        conn.commit()
-        duration = round(time.time() - start, 1)
-        conn.execute("""
-            INSERT INTO crawler_runs (run_date, store_id, status, endpoints_hit, duration_secs)
-            VALUES (?,?,?,?,?)
-        """, (target_date.strftime("%Y-%m-%d"), store_id, "success", len(days)+2, duration))
-        conn.commit()
-        log(f"{store['name']}: ✅ done — {len(days)} days stored, {duration}s")
-
-    except Exception as e:
-        log(f"{store['name']}: ❌ {e}")
-        conn.execute("INSERT INTO crawler_runs (run_date, store_id, status, error_message) VALUES (?,?,?,?)",
-            (target_date.strftime("%Y-%m-%d"), store_id, "failed", str(e)))
-        conn.commit()
-    finally:
-        context.close()
-        browser.close()
+    days = parse_search_days(html)
+    days.sort(key=lambda d: d["date"])
+    log(f"  {store['name']}: {len(days)} days")
+    return days
 
 def main():
-    target_date = datetime.now() - timedelta(days=1)
-    log(f"Collecting data for {target_date.strftime('%Y-%m-%d')}")
-    init_db()
-    conn = get_db()
-    with sync_playwright() as pw:
-        for store in STORES:
-            process_store(pw, store, conn, target_date)
-    conn.close()
-    log("✅ Done")
+    log("Dashboard data collector starting...")
+    today = datetime.now().strftime("%Y-%m-%d")
+    output = {"generated": today, "stores": {}}
+
+    for store in STORES:
+        days = collect_store(store)
+        output["stores"][store["name"]] = {"days": days or []}
+
+    Path("data").mkdir(exist_ok=True)
+    Path("data/latest.json").write_text(json.dumps(output))
+    Path(f"data/{today}.json").write_text(json.dumps(output))
+
+    total = sum(len(v["days"]) for v in output["stores"].values())
+    log(f"\nSaved data/latest.json — {total} total days across all stores")
 
 if __name__ == "__main__":
     main()
