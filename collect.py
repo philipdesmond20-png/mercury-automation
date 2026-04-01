@@ -101,15 +101,22 @@ def parse_search_days(html):
         if len(days) == 0:
             log(f"  Sample row cells: {cells}")
 
+        # Actual Mercury column order (0-indexed after date):
+        # 0=Date, 1=FuelVol, 2=Fuel, 3=Grocery, 4=Lottery, 5=LotteryPayouts,
+        # 6=Financial, 7=NonFuel, 8=Tax, 9=Total, 10=MOP/EBT, 11=PaidIn/Out,
+        # 12=CashDrop, 13=ATMDrop, 14=Difference
+        lottery     = safe_float(cells[4]) if len(cells) > 4 else 0
+        lotto_payout= safe_float(cells[5]) if len(cells) > 5 else 0
+
         day = {
             "date":         iso_date,
             "display_date": display_date,
-            "total_sales":  safe_float(cells[1]) if len(cells) > 1 else 0,
-            "fuel_sales":   safe_float(cells[2]) if len(cells) > 2 else 0,
-            "inside_sales": safe_float(cells[3]) if len(cells) > 3 else 0,
-            "lottery_net":  safe_float(cells[4]) if len(cells) > 4 else 0,
-            "cash_drop":    safe_float(cells[5]) if len(cells) > 5 else 0,
-            "over_short":   safe_float(cells[6]) if len(cells) > 6 else 0,
+            "total_sales":  safe_float(cells[9])  if len(cells) > 9  else 0,
+            "fuel_sales":   safe_float(cells[2])  if len(cells) > 2  else 0,
+            "inside_sales": safe_float(cells[3])  if len(cells) > 3  else 0,
+            "lottery_net":  round(lottery + lotto_payout, 2),  # Lottery + (negative) Payouts
+            "cash_drop":    safe_float(cells[12]) if len(cells) > 12 else 0,
+            "over_short":   safe_float(cells[14]) if len(cells) > 14 else 0,
         }
         days.append(day)
 
