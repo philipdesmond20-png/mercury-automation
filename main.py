@@ -220,6 +220,16 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         page.wait_for_timeout(5000)
 
         page.wait_for_selector("#dayResultsTable", timeout=120000)
+
+        # Set month/year and fetch results
+        month_name, year_str = get_target_month_year()
+        log(f"{store_name}: selecting month={month_name} year={year_str}")
+        page.select_option("#searchSummaryMonth", label=month_name)
+        page.select_option("#searchDayYear", label=year_str)
+        page.click("text=Get Results")
+        page.wait_for_timeout(5000)
+        page.wait_for_selector("#dayResultsTable tbody tr", timeout=60000)
+
         page.wait_for_function("() => typeof downloadCSV === 'function'", timeout=120000)
 
         shift_date = get_latest_shift_date(page, store_name)
