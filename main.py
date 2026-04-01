@@ -4,6 +4,7 @@ import csv
 import json
 import requests
 import gspread
+from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
@@ -95,6 +96,23 @@ def trigger_fill(store_name):
     log(f"Triggering Apps Script for {store_name}")
     r = requests.get(url, params={"store": store_name}, timeout=60)
     log(f"Apps Script response for {store_name}: {r.status_code}")
+
+
+def get_target_month_year():
+    """
+    Returns (month_name, year_str) to search.
+    On the 1st of the month, Mercury has no data yet for the new month,
+    so we look back at the previous month.
+    On all other days, we use the current month.
+    """
+    today = date.today()
+    if today.day == 1:
+        # Step back to last day of previous month
+        target = today - timedelta(days=1)
+        log(f"1st of month detected — targeting previous month: {target.strftime('%B %Y')}")
+    else:
+        target = today
+    return target.strftime("%B"), target.strftime("%Y")
 
 
 def get_latest_shift_date(page, store_name):
