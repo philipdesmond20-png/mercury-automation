@@ -224,7 +224,7 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         # Set month/year and fetch results
         month_name, year_str = get_target_month_year()
         log(f"{store_name}: selecting month={month_name} year={year_str}")
-        page.select_option("#searchSummaryMonth", label=month_name)
+        page.select_option("#searchDayMonth", label=month_name)
         page.select_option("#searchDayYear", label=year_str)
         page.click("text=Get Results")
         page.wait_for_timeout(5000)
