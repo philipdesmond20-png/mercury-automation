@@ -22,6 +22,7 @@ STORES = [
     ("Texaco",   os.environ["STORE_TEXACO_USERNAME"],  os.environ["STORE_TEXACO_PASSWORD"]),
     ("Dalton",   os.environ["STORE_DALTON_USERNAME"],  os.environ["STORE_DALTON_PASSWORD"]),
     ("Rome KS3", os.environ["STORE_ROME_USERNAME"],    os.environ["STORE_ROME_PASSWORD"]),
+    ("Carnesville", os.environ["STORE_CARNESVILLE_USERNAME"], os.environ["STORE_CARNESVILLE_PASSWORD"]),
 ]
 
 # Pages to visit after login — add more as discovered

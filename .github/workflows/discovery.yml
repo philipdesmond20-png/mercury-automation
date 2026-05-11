@@ -30,6 +30,8 @@ jobs:
           STORE_DALTON_PASSWORD:  ${{ secrets.STORE_DALTON_PASSWORD }}
           STORE_ROME_USERNAME:    ${{ secrets.STORE_ROME_USERNAME }}
           STORE_ROME_PASSWORD:    ${{ secrets.STORE_ROME_PASSWORD }}
+          STORE_CARNESVILLE_USERNAME: ${{ secrets.STORE_CARNESVILLE_USERNAME }}
+          STORE_CARNESVILLE_PASSWORD: ${{ secrets.STORE_CARNESVILLE_PASSWORD }}
         run: python discover.py
 
       - name: Upload discovery artifacts

@@ -201,7 +201,7 @@ tfoot td{border-top:1px solid var(--bd2);border-bottom:none;background:var(--c3)
 <div class="mbg" id="mod"><div class="mod"><div class="mhd"><div class="mtl" id="mtl">Detail</div><div class="mac"><button class="eb" onclick="expCSV()">↓ CSV</button><button class="mcl" onclick="cMod()">✕</button></div></div><div class="msr"><input class="si" id="msi" placeholder="Search transactions…" oninput="fMod()"></div><div class="mb" id="mbd"></div></div></div>
 <script>
 const DU='./data/latest.json';
-let D=null,ST='Texaco',STS=['Texaco','Dalton','Rome KS3'];
+let D=null,ST='Texaco',STS=['Texaco','Dalton','Rome KS3','Carnesville'];
 let rng='month',cS=null,cE=null,chts={},mD=[],sK=null,sDir='desc';
 async function init(){bSW();bNav();try{const r=await fetch(DU);if(!r.ok)throw new Error('HTTP '+r.status+' — data/latest.json not found. Upload files and run the workflow first.');D=await r.json();sSB('live',D.generated);rAll();}catch(e){sSB('off',null);document.getElementById('ovk').innerHTML=`<div style="grid-column:1/-1;padding:24px;background:rgba(127,29,29,.2);border:2px solid rgba(239,68,68,.5);border-radius:12px;color:#f87171;font-size:14px;line-height:1.6">⚠ ${e.message}</div>`;}}
 function sSB(s,d){const e=document.getElementById('sbdg');e.className='badge '+(s==='live'?'bg-live':'bg-off');e.textContent=(s==='live'?'● '+d:'● offline');}

@@ -33,6 +33,8 @@ jobs:
           STORE_ROME_PASSWORD: ${{ secrets.STORE_ROME_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          STORE_CARNESVILLE_USERNAME: ${{ secrets.STORE_CARNESVILLE_USERNAME }}
+          STORE_CARNESVILLE_PASSWORD: ${{ secrets.STORE_CARNESVILLE_PASSWORD }}
         run: python -u main.py
 
       - name: Upload debug files
