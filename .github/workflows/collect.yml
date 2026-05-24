@@ -36,7 +36,7 @@ jobs:
           APPS_SCRIPT_URL:        ${{ secrets.APPS_SCRIPT_URL }}
           STORE_CARNESVILLE_USERNAME: ${{ secrets.STORE_CARNESVILLE_USERNAME }}
           STORE_CARNESVILLE_PASSWORD: ${{ secrets.STORE_CARNESVILLE_PASSWORD }}
-        run: python main.py
+        run: python -u main.py
 
       - name: Commit data files to repo
         run: |
