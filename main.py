@@ -131,7 +131,16 @@ def has_sales_day_controls(page):
         "#searchDayForm",
         "#dayResultsTable",
     ]
-    return any(page.locator(selector).count() > 0 for selector in selectors)
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() == 0:
+            continue
+        try:
+            if locator.first.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def click_first_available(page, selectors, label, timeout=20000):
@@ -437,7 +446,11 @@ def open_sales_day_view(page, store_name):
             "text=Sales - Day",
             "a:has-text('Sales - Day')",
             "li:has-text('Sales - Day')",
+            "button:has-text('Day')",
+            "a:has-text('Day')",
+            "li:has-text('Day')",
             "[onclick*='Sales - Day']",
+            "[onclick*='Day']",
             "[href*='searchDays']",
         ],
         "Sales - Day"
@@ -449,11 +462,18 @@ def open_sales_day_view(page, store_name):
         page.wait_for_function(
             """
             () => {
-                return !!(
-                    document.querySelector("#searchDayMonth") ||
-                    document.querySelector("#searchDayYear") ||
-                    document.querySelector("#dayResultsTable") ||
-                    document.querySelector("#searchDayForm")
+                const isVisible = (selector) => {
+                    const node = document.querySelector(selector);
+                    if (!node) return false;
+                    const style = window.getComputedStyle(node);
+                    return style && style.display !== 'none' && style.visibility !== 'hidden' && node.offsetParent !== null;
+                };
+
+                return (
+                    isVisible("#searchDayMonth") ||
+                    isVisible("#searchDayYear") ||
+                    isVisible("#dayResultsTable") ||
+                    isVisible("#searchDayForm")
                 );
             }
             """,
@@ -468,7 +488,13 @@ def open_sales_day_view(page, store_name):
 
 
 def select_option_with_fallback(page, selector, wanted_label, store_name):
-    page.wait_for_selector(selector, timeout=30000)
+    page.wait_for_function(
+        """
+        (sel) => !!document.querySelector(sel)
+        """,
+        selector,
+        timeout=30000
+    )
     wanted = str(wanted_label).strip().lower()
 
     try:
