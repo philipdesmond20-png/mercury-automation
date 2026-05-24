@@ -143,6 +143,81 @@ def wait_for_login_success(page, store_name):
         raise Exception(f"{store_name}: still on login page after submit")
 
 
+def select_first_non_empty_option(options):
+    for option in options:
+        value = str(option.get("value") or "").strip()
+        if value:
+            return option
+    return None
+
+
+def handle_location_selection(page, store_name):
+    is_location_page = (
+        "/user/viewLocations" in page.url or
+        page.locator("#multipleLocations").count() > 0
+    )
+    if not is_location_page:
+        return
+
+    log(f"{store_name}: location selection page detected")
+    log_page_debug_state(page, store_name, "_locations")
+
+    select_locator = page.locator("#multipleLocations")
+    if select_locator.count() > 0:
+        options = select_locator.evaluate(
+            """
+            (node) => Array.from(node.options).map((option) => ({
+                text: (option.textContent || "").trim(),
+                value: option.value
+            }))
+            """
+        )
+        chosen = select_first_non_empty_option(options)
+        if not chosen:
+            save_json(f"{store_name}_location_options.json", options)
+            save_debug(page, store_name, "_locations_missing")
+            raise Exception(f"{store_name}: location selector has no usable options")
+
+        log(f"{store_name}: selecting location {chosen['text']} ({chosen['value']})")
+        page.select_option("#multipleLocations", value=chosen["value"])
+
+        if page.evaluate("() => typeof changeLocation === 'function'"):
+            page.evaluate("() => changeLocation()")
+        else:
+            click_first_available(
+                page,
+                [
+                    "button:has-text('Continue')",
+                    "input[type='button'][value='Continue']",
+                    "input[type='submit'][value='Continue']",
+                    "text=Continue",
+                ],
+                "location continue",
+                timeout=10000
+            )
+
+        page.wait_for_load_state("networkidle", timeout=120000)
+        page.wait_for_timeout(2000)
+        log_page_debug_state(page, store_name, "_location_selected")
+        return
+
+    clicked_selector = click_first_available(
+        page,
+        [
+            "a[href*='switchLocation']",
+            "a[href*='homepage']",
+            "a[href*='shifts']",
+            "a[href*='locationId']",
+        ],
+        "location link",
+        timeout=10000
+    )
+    log(f"{store_name}: followed location link via {clicked_selector}")
+    page.wait_for_load_state("networkidle", timeout=120000)
+    page.wait_for_timeout(2000)
+    log_page_debug_state(page, store_name, "_location_selected")
+
+
 def open_sales_day_view(page, store_name):
     if has_sales_day_controls(page):
         log(f"{store_name}: sales day controls already visible")
@@ -453,6 +528,7 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         wait_for_login_success(page, store_name)
         log_page_debug_state(page, store_name, "_after_login")
         save_debug(page, store_name, "_after_login")
+        handle_location_selection(page, store_name)
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
         log_page_debug_state(page, store_name, "_shifts_index")
