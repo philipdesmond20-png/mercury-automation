@@ -6,7 +6,7 @@ import requests
 import gspread
 from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
@@ -37,10 +37,222 @@ def save_bytes(path, data):
         f.write(data)
 
 
+def save_json(path, payload):
+    save_text(path, json.dumps(payload, indent=2))
+
+
+def get_page_debug_state(page):
+    return page.evaluate(
+        """
+        () => {
+            const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+            const takeTexts = (selector, limit = 30) =>
+                Array.from(document.querySelectorAll(selector))
+                    .map((node) => clean(node.innerText || node.textContent))
+                    .filter(Boolean)
+                    .slice(0, limit);
+
+            const optionSummary = Array.from(document.querySelectorAll("select")).map((select) => ({
+                id: select.id || null,
+                name: select.name || null,
+                value: select.value || null,
+                options: Array.from(select.options).map((option) => ({
+                    text: clean(option.textContent),
+                    value: option.value
+                })).slice(0, 20)
+            }));
+
+            const functions = Object.keys(window)
+                .filter((key) =>
+                    typeof window[key] === "function" &&
+                    /(download|export|csv)/i.test(key)
+                )
+                .slice(0, 40);
+
+            return {
+                url: window.location.href,
+                title: document.title,
+                links: takeTexts("a"),
+                buttons: takeTexts("button, input[type='button'], input[type='submit']"),
+                headings: takeTexts("h1, h2, h3, .pageTitle, .title"),
+                selectSummary: optionSummary,
+                hasDayResultsTable: !!document.querySelector("#dayResultsTable"),
+                hasSearchDayForm: !!document.querySelector("#searchDayForm"),
+                hasMonthSelect: !!document.querySelector("#searchDayMonth"),
+                hasYearSelect: !!document.querySelector("#searchDayYear"),
+                hasLoginUserName: !!document.querySelector("input[name='loginUserName']"),
+                hasLoginPassword: !!document.querySelector("input[name='loginPassword']"),
+                downloadFunctions: functions
+            };
+        }
+        """
+    )
+
+
+def log_page_debug_state(page, store_name, suffix):
+    state = get_page_debug_state(page)
+    log(f"{store_name}{suffix} state: {json.dumps(state, sort_keys=True)}")
+    return state
+
+
 def save_debug(page, store_name, suffix):
     page.screenshot(path=f"{store_name}{suffix}.png", full_page=True)
     save_text(f"{store_name}{suffix}.html", page.content())
     save_text(f"{store_name}{suffix}.txt", page.locator("body").inner_text())
+    save_json(f"{store_name}{suffix}.json", get_page_debug_state(page))
+
+
+def has_sales_day_controls(page):
+    selectors = [
+        "#searchDayMonth",
+        "#searchDayYear",
+        "#searchDayForm",
+        "#dayResultsTable",
+    ]
+    return any(page.locator(selector).count() > 0 for selector in selectors)
+
+
+def click_first_available(page, selectors, label, timeout=20000):
+    last_error = None
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() == 0:
+            continue
+        target = locator.first
+        try:
+            target.scroll_into_view_if_needed(timeout=timeout)
+        except Exception:
+            pass
+        try:
+            target.click(timeout=timeout)
+            log(f"Clicked {label} via selector: {selector}")
+            return selector
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise Exception(f"No selector matched for {label}")
+
+
+def wait_for_login_success(page, store_name):
+    page.wait_for_load_state("networkidle", timeout=120000)
+    page.wait_for_timeout(2000)
+    if page.locator('input[name="loginUserName"]').count() > 0:
+        log_page_debug_state(page, store_name, "_login_failed")
+        save_debug(page, store_name, "_login_failed")
+        raise Exception(f"{store_name}: still on login page after submit")
+
+
+def open_sales_day_view(page, store_name):
+    if has_sales_day_controls(page):
+        log(f"{store_name}: sales day controls already visible")
+        return
+
+    clicked_selector = click_first_available(
+        page,
+        [
+            "text=Sales - Day",
+            "a:has-text('Sales - Day')",
+            "li:has-text('Sales - Day')",
+            "[onclick*='Sales - Day']",
+            "[href*='searchDays']",
+        ],
+        "Sales - Day"
+    )
+
+    page.wait_for_timeout(3000)
+
+    try:
+        page.wait_for_function(
+            """
+            () => {
+                return !!(
+                    document.querySelector("#searchDayMonth") ||
+                    document.querySelector("#searchDayYear") ||
+                    document.querySelector("#dayResultsTable") ||
+                    document.querySelector("#searchDayForm")
+                );
+            }
+            """,
+            timeout=30000
+        )
+    except PlaywrightTimeoutError:
+        log_page_debug_state(page, store_name, "_sales_day_missing")
+        save_debug(page, store_name, "_sales_day_missing")
+        raise Exception(
+            f"{store_name}: Sales - Day click succeeded ({clicked_selector}) but day controls did not appear"
+        )
+
+
+def select_option_with_fallback(page, selector, wanted_label, store_name):
+    page.wait_for_selector(selector, timeout=30000)
+    wanted = str(wanted_label).strip().lower()
+
+    try:
+        page.select_option(selector, label=wanted_label)
+        return
+    except Exception:
+        pass
+
+    options = page.locator(selector).evaluate(
+        """
+        (node) => Array.from(node.options).map((option) => ({
+            text: (option.textContent || "").trim(),
+            value: option.value
+        }))
+        """
+    )
+
+    for option in options:
+        text = option["text"].strip().lower()
+        value = str(option["value"]).strip().lower()
+        if text == wanted or value == wanted:
+            page.select_option(selector, value=option["value"])
+            return
+
+    save_json(f"{store_name}_{selector.replace('#', '')}_options.json", options)
+    raise Exception(f"{store_name}: could not find option '{wanted_label}' for {selector}")
+
+
+def click_get_results(page):
+    return click_first_available(
+        page,
+        [
+            "#searchDayForm button:has-text('Get Results')",
+            "#searchDayForm input[type='submit'][value='Get Results']",
+            "button:has-text('Get Results')",
+            "input[type='submit'][value='Get Results']",
+            "text=Get Results",
+        ],
+        "Get Results"
+    )
+
+
+def wait_for_shift_rows(page, store_name):
+    try:
+        page.wait_for_selector("#dayResultsTable tbody tr", timeout=60000)
+        return
+    except PlaywrightTimeoutError:
+        pass
+
+    try:
+        page.wait_for_function(
+            """
+            () => {
+                const rows = Array.from(document.querySelectorAll("table tbody tr"));
+                return rows.some((row) => {
+                    const firstCell = row.querySelector("td");
+                    if (!firstCell) return false;
+                    return /^\\d{2}\\/\\d{2}\\/\\d{4}$/.test((firstCell.innerText || "").trim());
+                });
+            }
+            """,
+            timeout=30000
+        )
+    except PlaywrightTimeoutError:
+        log_page_debug_state(page, store_name, "_day_rows_missing")
+        save_debug(page, store_name, "_day_rows_missing")
+        raise Exception(f"{store_name}: no day result rows appeared after searching")
 
 
 def parse_csv_text(csv_text):
@@ -121,7 +333,10 @@ def get_latest_shift_date(page, store_name):
 
     js = """
     () => {
-        const rows = Array.from(document.querySelectorAll("#dayResultsTable tbody tr"));
+        const tableRows = document.querySelectorAll("#dayResultsTable tbody tr").length
+            ? document.querySelectorAll("#dayResultsTable tbody tr")
+            : document.querySelectorAll("table tbody tr");
+        const rows = Array.from(tableRows);
         const dates = [];
 
         for (const row of rows) {
@@ -136,13 +351,15 @@ def get_latest_shift_date(page, store_name):
         return {
             dates,
             firstDate: dates.length ? dates[0] : null,
-            tableHtml: document.querySelector("#dayResultsTable") ? document.querySelector("#dayResultsTable").outerHTML.slice(0, 4000) : null
+            tableHtml: document.querySelector("#dayResultsTable")
+                ? document.querySelector("#dayResultsTable").outerHTML.slice(0, 4000)
+                : (document.querySelector("table") ? document.querySelector("table").outerHTML.slice(0, 4000) : null)
         };
     }
     """
 
     result = page.evaluate(js)
-    save_text(f"{store_name}_date_debug.json", json.dumps(result, indent=2))
+    save_json(f"{store_name}_date_debug.json", result)
 
     picked = result.get("firstDate")
     if not picked:
@@ -153,13 +370,30 @@ def get_latest_shift_date(page, store_name):
 
 
 def download_csv_via_browser(page, store_name, shift_date):
-    log(f"{store_name}: invoking browser downloadCSV('{shift_date}')")
+    log(f"{store_name}: attempting CSV download for {shift_date}")
 
-    if not page.evaluate("() => typeof downloadCSV === 'function'"):
-        raise Exception(f"{store_name}: downloadCSV function is not available on page")
+    has_download_csv = page.evaluate("() => typeof downloadCSV === 'function'")
 
     with page.expect_download(timeout=120000) as download_info:
-        page.evaluate("(date) => downloadCSV(date)", shift_date)
+        if has_download_csv:
+            log(f"{store_name}: invoking browser downloadCSV('{shift_date}')")
+            page.evaluate("(date) => downloadCSV(date)", shift_date)
+        else:
+            log(f"{store_name}: downloadCSV missing, trying visible CSV/export controls")
+            click_first_available(
+                page,
+                [
+                    "button:has-text('CSV')",
+                    "a:has-text('CSV')",
+                    "text=CSV",
+                    "[onclick*='download']",
+                    "[onclick*='csv']",
+                    "[href*='csv']",
+                    "[href*='export']",
+                ],
+                "CSV download control",
+                timeout=15000
+            )
 
     download = download_info.value
     suggested_name = download.suggested_filename
@@ -207,6 +441,8 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         log(f"Running {store_name}")
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
+        log_page_debug_state(page, store_name, "_login_page")
+        save_debug(page, store_name, "_login_page")
 
         page.fill('input[name="loginUserName"]', username)
         page.fill('input[name="loginPassword"]', password)
@@ -214,28 +450,57 @@ def login_and_fetch_csv(playwright, store_name, username, password):
         with page.expect_navigation(wait_until="networkidle", timeout=120000):
             page.click("#submitButton")
 
+        wait_for_login_success(page, store_name)
+        log_page_debug_state(page, store_name, "_after_login")
+        save_debug(page, store_name, "_after_login")
+
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
+        log_page_debug_state(page, store_name, "_shifts_index")
+        save_debug(page, store_name, "_shifts_index")
 
-        page.click("text=Sales - Day")
-        page.wait_for_timeout(5000)
-
-        page.wait_for_selector("#dayResultsTable", timeout=120000)
+        open_sales_day_view(page, store_name)
 
         # Set month/year and fetch results
         month_name, year_str = get_target_month_year()
         log(f"{store_name}: selecting month={month_name} year={year_str}")
-        page.select_option("#searchDayMonth", label=month_name)
-        page.select_option("#searchDayYear", label=year_str)
-        page.click("#searchDayForm button:has-text('Get Results')")
+        select_option_with_fallback(page, "#searchDayMonth", month_name, store_name)
+        select_option_with_fallback(page, "#searchDayYear", year_str, store_name)
+        click_get_results(page)
         page.wait_for_timeout(5000)
-        page.wait_for_selector("#dayResultsTable tbody tr", timeout=60000)
+        wait_for_shift_rows(page, store_name)
 
-        page.wait_for_function("() => typeof downloadCSV === 'function'", timeout=120000)
+        try:
+            page.wait_for_function(
+                """
+                () => {
+                    const hasFunction = typeof downloadCSV === 'function';
+                    const hasControl = !!(
+                        document.querySelector("button[onclick*='download']") ||
+                        document.querySelector("button[onclick*='csv']") ||
+                        document.querySelector("a[href*='csv']") ||
+                        document.querySelector("a[href*='export']") ||
+                        Array.from(document.querySelectorAll("button,a,input"))
+                            .some((node) => /csv/i.test((node.innerText || node.value || "").trim()))
+                    );
+                    return hasFunction || hasControl;
+                }
+                """,
+                timeout=30000
+            )
+        except PlaywrightTimeoutError:
+            log_page_debug_state(page, store_name, "_download_control_missing")
+            save_debug(page, store_name, "_download_control_missing")
+            raise Exception(f"{store_name}: no CSV export control became available")
 
         shift_date = get_latest_shift_date(page, store_name)
         csv_text = download_csv_via_browser(page, store_name, shift_date)
 
         return csv_text
+
+    except Exception:
+        log_page_debug_state(page, store_name, "_error")
+        save_debug(page, store_name, "_error")
+        raise
 
     finally:
         context.close()

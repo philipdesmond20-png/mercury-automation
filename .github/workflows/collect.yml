@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          playwright install chromium
+          python -m playwright install --with-deps chromium
       - name: Run collector
         env:
           STORE_TEXACO_USERNAME:  ${{ secrets.STORE_TEXACO_USERNAME }}
@@ -36,7 +36,7 @@ jobs:
           APPS_SCRIPT_URL:        ${{ secrets.APPS_SCRIPT_URL }}
           STORE_CARNESVILLE_USERNAME: ${{ secrets.STORE_CARNESVILLE_USERNAME }}
           STORE_CARNESVILLE_PASSWORD: ${{ secrets.STORE_CARNESVILLE_PASSWORD }}
-        run: python main.py
+        run: python -u main.py
 
       - name: Commit data files to repo
         run: |
