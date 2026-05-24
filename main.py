@@ -492,7 +492,7 @@ def select_option_with_fallback(page, selector, wanted_label, store_name):
         """
         (sel) => !!document.querySelector(sel)
         """,
-        selector,
+        arg=selector,
         timeout=30000
     )
     wanted = str(wanted_label).strip().lower()
