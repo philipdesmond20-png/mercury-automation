@@ -313,10 +313,29 @@ def finish_location_selection(page, store_name):
     return "/user/viewLocations" not in page.url and page.locator("#multipleLocations").count() == 0
 
 
+def settle_page(page, timeout=30000):
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout)
+    except Exception:
+        pass
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+    except Exception:
+        pass
+
+    page.wait_for_timeout(2000)
+
+
 def apply_location_dropdown(page, store_name):
     select_locator = page.locator("#multipleLocations")
-    if select_locator.count() == 0:
-        return False
+    try:
+        if select_locator.count() == 0:
+            return False
+    except Exception:
+        settle_page(page)
+        if select_locator.count() == 0:
+            return False
 
     options = select_locator.evaluate(
         """
@@ -343,8 +362,7 @@ def apply_location_dropdown(page, store_name):
     if page.evaluate("() => typeof changeLocation === 'function'"):
         page.evaluate("() => changeLocation()")
 
-    page.wait_for_load_state("networkidle", timeout=120000)
-    page.wait_for_timeout(2000)
+    settle_page(page, timeout=120000)
     return True
 
 
@@ -365,6 +383,8 @@ def handle_location_selection(page, store_name):
         return
 
     if try_click_named_location(page, store_name):
+        settle_page(page, timeout=120000)
+        log_page_debug_state(page, store_name, "_location_after_manage")
         if apply_location_dropdown(page, store_name):
             log_page_debug_state(page, store_name, "_location_selected")
             return
