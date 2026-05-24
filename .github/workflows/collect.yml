@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+          playwright install chromium
       - name: Run collector
         env:
           STORE_TEXACO_USERNAME:  ${{ secrets.STORE_TEXACO_USERNAME }}
