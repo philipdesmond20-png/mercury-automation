@@ -11,6 +11,13 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
 
+LOCATION_NAME_ALIASES = {
+    "Texaco": ["Texaco"],
+    "Dalton": ["Dalton"],
+    "Rome KS3": ["Rome KS3", "Rome"],
+    "Carnesville": ["Carnesville"],
+}
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -166,6 +173,135 @@ def select_first_non_empty_option(options):
     return None
 
 
+def get_location_aliases(store_name):
+    aliases = LOCATION_NAME_ALIASES.get(store_name)
+    return aliases if aliases else [store_name]
+
+
+def save_location_candidates(page, store_name):
+    candidates = page.evaluate(
+        """
+        () => {
+            const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+            const findManage = (scope) =>
+                Array.from(scope.querySelectorAll("input[type='button'], input[type='submit'], button, a"))
+                    .find((node) => /manage/i.test(clean(node.value || node.innerText || node.textContent)));
+            const nodes = Array.from(document.querySelectorAll("tr, li, .row, .item, div"));
+            const seen = new Set();
+            const out = [];
+
+            for (const node of nodes) {
+                const text = clean(node.innerText || node.textContent);
+                if (!text || text.length > 300) continue;
+
+                const manage = findManage(node);
+                if (!manage) continue;
+
+                const key = text + "||" + (manage.tagName || "");
+                if (seen.has(key)) continue;
+                seen.add(key);
+
+                out.push({
+                    text,
+                    actionTag: manage.tagName || null,
+                    actionText: clean(manage.value || manage.innerText || manage.textContent)
+                });
+
+                if (out.length >= 30) break;
+            }
+
+            return out;
+        }
+        """
+    )
+    save_json(f"{store_name}_location_candidates.json", candidates)
+    return candidates
+
+
+def try_click_named_location(page, store_name):
+    aliases = get_location_aliases(store_name)
+
+    project_input = page.locator("#project")
+    if project_input.count() > 0:
+        for alias in aliases:
+            try:
+                project_input.fill(alias, timeout=5000)
+                page.wait_for_timeout(1000)
+                log(f"{store_name}: filled location search with '{alias}'")
+                break
+            except Exception:
+                continue
+
+    clicked = page.evaluate(
+        """
+        (aliases) => {
+            const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+            const norm = (value) => clean(value).toLowerCase();
+            const findManage = (scope) =>
+                Array.from(scope.querySelectorAll("input[type='button'], input[type='submit'], button, a"))
+                    .find((node) => /manage/i.test(clean(node.value || node.innerText || node.textContent)));
+            const wants = aliases.map(norm).filter(Boolean);
+            const scopes = Array.from(document.querySelectorAll("tr, li, .row, .item, div"));
+
+            for (const scope of scopes) {
+                const text = norm(scope.innerText || scope.textContent);
+                if (!text) continue;
+                if (!wants.some((want) => text.includes(want))) continue;
+
+                const manage = findManage(scope);
+                if (!manage) continue;
+
+                manage.click();
+                return {
+                    matchedAlias: wants.find((want) => text.includes(want)) || null,
+                    scopeText: clean(scope.innerText || scope.textContent).slice(0, 200),
+                    actionTag: manage.tagName || null,
+                    actionText: clean(manage.value || manage.innerText || manage.textContent)
+                };
+            }
+
+            return null;
+        }
+        """,
+        aliases
+    )
+
+    if clicked:
+        log(
+            f"{store_name}: clicked location match '{clicked['matchedAlias']}' via "
+            f"{clicked['actionTag']} {clicked['actionText']}"
+        )
+        return True
+
+    return False
+
+
+def finish_location_selection(page, store_name):
+    try:
+        clicked_selector = click_first_available(
+            page,
+            [
+                "button:has-text('Continue')",
+                "input[type='button'][value='Continue']",
+                "input[type='submit'][value='Continue']",
+                "text=Continue",
+                "button:has-text('Ok')",
+                "input[type='button'][value='Ok']",
+                "input[type='submit'][value='Ok']",
+                "text=Ok",
+            ],
+            "location continue",
+            timeout=10000
+        )
+        log(f"{store_name}: attempted location continue via {clicked_selector}")
+    except Exception:
+        log(f"{store_name}: no explicit location continue button was clickable")
+
+    page.wait_for_load_state("networkidle", timeout=120000)
+    page.wait_for_timeout(2000)
+    return "/user/viewLocations" not in page.url and page.locator("#multipleLocations").count() == 0
+
+
 def handle_location_selection(page, store_name):
     is_location_page = (
         "/user/viewLocations" in page.url or
@@ -176,6 +312,7 @@ def handle_location_selection(page, store_name):
 
     log(f"{store_name}: location selection page detected")
     log_page_debug_state(page, store_name, "_locations")
+    save_location_candidates(page, store_name)
 
     select_locator = page.locator("#multipleLocations")
     if select_locator.count() > 0:
@@ -216,6 +353,12 @@ def handle_location_selection(page, store_name):
         log_page_debug_state(page, store_name, "_location_selected")
         return
 
+    if try_click_named_location(page, store_name):
+        if finish_location_selection(page, store_name):
+            log_page_debug_state(page, store_name, "_location_selected")
+            return
+        log_page_debug_state(page, store_name, "_location_named_attempt")
+
     choice_inputs = page.locator("input[type='radio'], input[type='checkbox']")
     if choice_inputs.count() > 0:
         try:
@@ -228,30 +371,9 @@ def handle_location_selection(page, store_name):
             except Exception:
                 pass
 
-    try:
-        clicked_selector = click_first_available(
-            page,
-            [
-                "button:has-text('Continue')",
-                "input[type='button'][value='Continue']",
-                "input[type='submit'][value='Continue']",
-                "text=Continue",
-                "button:has-text('Ok')",
-                "input[type='button'][value='Ok']",
-                "input[type='submit'][value='Ok']",
-                "text=Ok",
-            ],
-            "location continue",
-            timeout=10000
-        )
-        log(f"{store_name}: attempted location continue via {clicked_selector}")
-        page.wait_for_load_state("networkidle", timeout=120000)
-        page.wait_for_timeout(2000)
-        if "/user/viewLocations" not in page.url and page.locator("#multipleLocations").count() == 0:
-            log_page_debug_state(page, store_name, "_location_selected")
-            return
-    except Exception:
-        pass
+    if finish_location_selection(page, store_name):
+        log_page_debug_state(page, store_name, "_location_selected")
+        return
 
     clicked_selector = click_first_available(
         page,
