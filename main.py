@@ -178,6 +178,17 @@ def get_location_aliases(store_name):
     return aliases if aliases else [store_name]
 
 
+def select_location_option(options, store_name):
+    aliases = [alias.strip().lower() for alias in get_location_aliases(store_name) if alias.strip()]
+
+    for option in options:
+        text = str(option.get("text") or "").strip().lower()
+        if text and any(alias in text for alias in aliases):
+            return option
+
+    return select_first_non_empty_option(options)
+
+
 def save_location_candidates(page, store_name):
     candidates = page.evaluate(
         """
@@ -302,6 +313,41 @@ def finish_location_selection(page, store_name):
     return "/user/viewLocations" not in page.url and page.locator("#multipleLocations").count() == 0
 
 
+def apply_location_dropdown(page, store_name):
+    select_locator = page.locator("#multipleLocations")
+    if select_locator.count() == 0:
+        return False
+
+    options = select_locator.evaluate(
+        """
+        (node) => Array.from(node.options).map((option) => ({
+            text: (option.textContent || "").trim(),
+            value: option.value
+        }))
+        """
+    )
+
+    chosen = select_location_option(options, store_name)
+    if not chosen:
+        save_json(f"{store_name}_location_options.json", options)
+        save_debug(page, store_name, "_locations_missing")
+        raise Exception(f"{store_name}: location selector has no usable options")
+
+    log(f"{store_name}: selecting location {chosen['text']} ({chosen['value']})")
+    page.select_option("#multipleLocations", value=chosen["value"])
+    try:
+        page.locator("#multipleLocations").dispatch_event("change")
+    except Exception:
+        pass
+
+    if page.evaluate("() => typeof changeLocation === 'function'"):
+        page.evaluate("() => changeLocation()")
+
+    page.wait_for_load_state("networkidle", timeout=120000)
+    page.wait_for_timeout(2000)
+    return True
+
+
 def handle_location_selection(page, store_name):
     is_location_page = (
         "/user/viewLocations" in page.url or
@@ -314,46 +360,14 @@ def handle_location_selection(page, store_name):
     log_page_debug_state(page, store_name, "_locations")
     save_location_candidates(page, store_name)
 
-    select_locator = page.locator("#multipleLocations")
-    if select_locator.count() > 0:
-        options = select_locator.evaluate(
-            """
-            (node) => Array.from(node.options).map((option) => ({
-                text: (option.textContent || "").trim(),
-                value: option.value
-            }))
-            """
-        )
-        chosen = select_first_non_empty_option(options)
-        if not chosen:
-            save_json(f"{store_name}_location_options.json", options)
-            save_debug(page, store_name, "_locations_missing")
-            raise Exception(f"{store_name}: location selector has no usable options")
-
-        log(f"{store_name}: selecting location {chosen['text']} ({chosen['value']})")
-        page.select_option("#multipleLocations", value=chosen["value"])
-
-        if page.evaluate("() => typeof changeLocation === 'function'"):
-            page.evaluate("() => changeLocation()")
-        else:
-            click_first_available(
-                page,
-                [
-                    "button:has-text('Continue')",
-                    "input[type='button'][value='Continue']",
-                    "input[type='submit'][value='Continue']",
-                    "text=Continue",
-                ],
-                "location continue",
-                timeout=10000
-            )
-
-        page.wait_for_load_state("networkidle", timeout=120000)
-        page.wait_for_timeout(2000)
+    if apply_location_dropdown(page, store_name):
         log_page_debug_state(page, store_name, "_location_selected")
         return
 
     if try_click_named_location(page, store_name):
+        if apply_location_dropdown(page, store_name):
+            log_page_debug_state(page, store_name, "_location_selected")
+            return
         if finish_location_selection(page, store_name):
             log_page_debug_state(page, store_name, "_location_selected")
             return
