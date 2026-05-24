@@ -62,6 +62,20 @@ def get_page_debug_state(page):
                 })).slice(0, 20)
             }));
 
+            const inputSummary = Array.from(document.querySelectorAll("input")).map((input) => {
+                const type = (input.type || "text").toLowerCase();
+                const payload = {
+                    id: input.id || null,
+                    name: input.name || null,
+                    type,
+                    checked: !!input.checked
+                };
+                if (!["password", "text", "email"].includes(type)) {
+                    payload.value = input.value || null;
+                }
+                return payload;
+            }).slice(0, 40);
+
             const functions = Object.keys(window)
                 .filter((key) =>
                     typeof window[key] === "function" &&
@@ -75,6 +89,7 @@ def get_page_debug_state(page):
                 links: takeTexts("a"),
                 buttons: takeTexts("button, input[type='button'], input[type='submit']"),
                 headings: takeTexts("h1, h2, h3, .pageTitle, .title"),
+                inputSummary,
                 selectSummary: optionSummary,
                 hasDayResultsTable: !!document.querySelector("#dayResultsTable"),
                 hasSearchDayForm: !!document.querySelector("#searchDayForm"),
@@ -200,6 +215,43 @@ def handle_location_selection(page, store_name):
         page.wait_for_timeout(2000)
         log_page_debug_state(page, store_name, "_location_selected")
         return
+
+    choice_inputs = page.locator("input[type='radio'], input[type='checkbox']")
+    if choice_inputs.count() > 0:
+        try:
+            choice_inputs.first.check(timeout=10000)
+            log(f"{store_name}: selected first available location choice input")
+        except Exception:
+            try:
+                choice_inputs.first.click(timeout=10000)
+                log(f"{store_name}: clicked first available location choice input")
+            except Exception:
+                pass
+
+    try:
+        clicked_selector = click_first_available(
+            page,
+            [
+                "button:has-text('Continue')",
+                "input[type='button'][value='Continue']",
+                "input[type='submit'][value='Continue']",
+                "text=Continue",
+                "button:has-text('Ok')",
+                "input[type='button'][value='Ok']",
+                "input[type='submit'][value='Ok']",
+                "text=Ok",
+            ],
+            "location continue",
+            timeout=10000
+        )
+        log(f"{store_name}: attempted location continue via {clicked_selector}")
+        page.wait_for_load_state("networkidle", timeout=120000)
+        page.wait_for_timeout(2000)
+        if "/user/viewLocations" not in page.url and page.locator("#multipleLocations").count() == 0:
+            log_page_debug_state(page, store_name, "_location_selected")
+            return
+    except Exception:
+        pass
 
     clicked_selector = click_first_available(
         page,
