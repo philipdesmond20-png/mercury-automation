@@ -52,18 +52,74 @@ def open_shifts_sync_view(page, store_name):
     )
     settle_page(page, timeout=30000)
 
-    click_first_available(
-        page,
-        [
-            "text=Sales - Current Shift (Ruby)",
-            "a:has-text('Sales - Current Shift (Ruby)')",
-            "button:has-text('Sales - Current Shift (Ruby)')",
-            "li:has-text('Sales - Current Shift (Ruby)')",
-            "text=Sales - Current Shift",
-        ],
-        "Sales - Current Shift (Ruby)",
-        timeout=20000,
+    page.wait_for_function(
+        """
+        () => Array.from(document.querySelectorAll("[onclick*='openShift']"))
+            .some((node) => /\\d{2}\\/\\d{2}\\/\\d{4}/.test((node.innerText || node.textContent || "").trim()))
+        """,
+        timeout=30000,
     )
+
+    shift_target = page.evaluate(
+        """
+        () => {
+            const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+            const isVisible = (node) => {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                return style.display !== "none" && style.visibility !== "hidden";
+            };
+
+            const candidates = Array.from(document.querySelectorAll("[onclick*='openShift']"))
+                .map((node) => ({
+                    node,
+                    text: clean(node.innerText || node.textContent),
+                    onclick: node.getAttribute("onclick") || ""
+                }))
+                .filter((item) => /\\d{2}\\/\\d{2}\\/\\d{4}/.test(item.text));
+
+            const chosen = candidates.find((item) => isVisible(item.node)) || candidates[0] || null;
+            if (!chosen) return null;
+
+            return {
+                text: chosen.text.slice(0, 200),
+                onclick: chosen.onclick
+            };
+        }
+        """
+    )
+
+    if not shift_target or not shift_target.get("onclick"):
+        raise Exception(f"{store_name}: could not find a clickable shift row on Sales - Shifts")
+
+    log(f"{store_name}: opening shift detail for {shift_target['text']}")
+    opened = page.evaluate(
+        """
+        (onclickText) => {
+            const match = onclickText.match(/openShift\\(['"]?([^'")]+)['"]?\\)/i);
+            if (match && typeof window.openShift === "function") {
+                window.openShift(match[1]);
+                return true;
+            }
+
+            const node = Array.from(document.querySelectorAll("[onclick*='openShift']"))
+                .find((candidate) => (candidate.getAttribute("onclick") || "") === onclickText);
+
+            if (node) {
+                node.click();
+                return true;
+            }
+
+            return false;
+        }
+        """,
+        shift_target["onclick"],
+    )
+
+    if not opened:
+        raise Exception(f"{store_name}: failed to open shift detail modal")
+
+    page.wait_for_timeout(2500)
     settle_page(page, timeout=30000)
 
     try:
@@ -75,11 +131,11 @@ def open_shifts_sync_view(page, store_name):
                 "a:has-text('Version 2')",
             ],
             "Version 2",
-            timeout=15000,
+            timeout=10000,
         )
-        settle_page(page, timeout=15000)
+        page.wait_for_timeout(1500)
     except Exception:
-        log(f"{store_name}: Version 2 toggle not found, continuing with current view")
+        log(f"{store_name}: Version 2 toggle not found, continuing with current modal view")
 
     page.wait_for_function(
         """
