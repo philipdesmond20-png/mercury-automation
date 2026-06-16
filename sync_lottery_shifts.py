@@ -226,17 +226,72 @@ def sync_lottery_rows(page, store_name):
 
 
 def save_shift_changes(page, store_name):
-    click_first_available(
-        page,
-        [
-            "button:has-text('Save')",
-            "input[type='button'][value='Save']",
-            "input[type='submit'][value='Save']",
-            "text=Save",
-        ],
-        "Save",
-        timeout=20000,
+    clicked = page.evaluate(
+        """
+        () => {
+            const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+            const isVisible = (node) => {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                return (
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    node.offsetWidth > 0 &&
+                    node.offsetHeight > 0
+                );
+            };
+
+            const lotteryTable = document.querySelector("#lotteryTable");
+            const modalScope = lotteryTable
+                ? lotteryTable.closest(".ui-dialog, .modal, [role='dialog'], .popup, .modal-content") || lotteryTable.parentElement
+                : null;
+
+            const candidates = Array.from(
+                document.querySelectorAll("button, input[type='button'], input[type='submit'], a")
+            ).filter((node) => {
+                const label = clean(node.value || node.innerText || node.textContent);
+                return /^save$/i.test(label) && isVisible(node) && !node.disabled;
+            });
+
+            const target = (modalScope && candidates.find((node) => modalScope.contains(node))) || candidates[0] || null;
+            if (!target) {
+                return { ok: false, reason: "no visible Save button found", count: candidates.length };
+            }
+
+            const label = clean(target.value || target.innerText || target.textContent);
+            target.scrollIntoView({ block: "center", inline: "center" });
+            target.click();
+            target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+
+            return {
+                ok: true,
+                label,
+                tag: target.tagName || null,
+                count: candidates.length
+            };
+        }
+        """
     )
+
+    if not clicked.get("ok"):
+        click_first_available(
+            page,
+            [
+                "button:has-text('Save')",
+                "input[type='button'][value='Save']",
+                "input[type='submit'][value='Save']",
+                "text=Save",
+            ],
+            "Save",
+            timeout=20000,
+        )
+    else:
+        log(
+            f"{store_name}: clicked Save via DOM helper "
+            f"({clicked.get('tag')} {clicked.get('label')}, {clicked.get('count')} visible candidates)"
+        )
+
+    page.wait_for_timeout(3000)
     settle_page(page, timeout=30000)
 
 
