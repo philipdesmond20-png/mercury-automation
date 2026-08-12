@@ -270,10 +270,12 @@ def sync_lottery_rows(page, store_name):
 
 
 def save_shift_changes(page, store_name):
-    lottery_save = page.locator("button[onclick='saveLotteryValues()']")
-    if lottery_save.count() == 1:
-        lottery_save.click()
-        log(f"{store_name}: clicked the lottery-specific Save button")
+    # The lottery popup's save control can remain in the DOM while hidden.
+    # The visible shift save submits the updated POS Amount values together.
+    shift_save = page.locator("button[onclick='doSubmitShiftInfo()']")
+    if shift_save.count() == 1:
+        shift_save.click()
+        log(f"{store_name}: clicked the visible shift Save button")
         page.wait_for_timeout(3000)
         settle_page(page, timeout=30000)
         return

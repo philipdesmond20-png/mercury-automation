@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import sync_lottery_shifts
-from sync_lottery_shifts import completed_store_day, open_shifts_sync_view, search_shifts_for_date
+from sync_lottery_shifts import completed_store_day, open_shifts_sync_view, save_shift_changes, search_shifts_for_date
 
 
 class FakeLocator:
@@ -53,6 +53,29 @@ class WaitForFunctionPage:
         raise StopAfterWait()
 
 
+class SaveLocator:
+    def __init__(self, page, selector):
+        self.page = page
+        self.selector = selector
+
+    def count(self):
+        return 1 if self.selector == "button[onclick='doSubmitShiftInfo()']" else 0
+
+    def click(self):
+        self.page.clicked.append(self.selector)
+
+
+class SavePage:
+    def __init__(self):
+        self.clicked = []
+
+    def locator(self, selector):
+        return SaveLocator(self, selector)
+
+    def wait_for_timeout(self, _timeout):
+        pass
+
+
 class CompletedStoreDayTests(unittest.TestCase):
     def test_uses_the_previous_calendar_day_in_new_york(self):
         now = datetime(2026, 8, 12, 11, 30, tzinfo=timezone.utc)
@@ -92,6 +115,14 @@ class CompletedStoreDayTests(unittest.TestCase):
             open_shifts_sync_view(page, "Texaco", date(2026, 8, 11))
 
         self.assertEqual(page.calls[0][1]["arg"], ["08/11/2026", "8/11/2026"])
+
+    def test_submits_the_visible_shift_save_button(self):
+        page = SavePage()
+
+        with patch.object(sync_lottery_shifts, "settle_page"):
+            save_shift_changes(page, "Texaco")
+
+        self.assertEqual(page.clicked, ["button[onclick='doSubmitShiftInfo()']"])
 
 
 if __name__ == "__main__":
