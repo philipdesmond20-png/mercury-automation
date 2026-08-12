@@ -261,7 +261,9 @@ def try_click_named_location(page, store_name):
                 Array.from(scope.querySelectorAll("input[type='button'], input[type='submit'], button, a"))
                     .find((node) => /manage/i.test(clean(node.value || node.innerText || node.textContent)));
             const wants = aliases.map(norm).filter(Boolean);
-            const scopes = Array.from(document.querySelectorAll("tr, li, .row, .item, div"));
+            // A parent container can contain every store and its first Manage
+            // button may belong to a different location. Only inspect table rows.
+            const scopes = Array.from(document.querySelectorAll("table tr"));
 
             for (const scope of scopes) {
                 const text = norm(scope.innerText || scope.textContent);
@@ -394,6 +396,14 @@ def handle_location_selection(page, store_name):
     if try_click_named_location(page, store_name):
         settle_page(page, timeout=120000)
         log_page_debug_state(page, store_name, "_location_after_manage")
+
+        # Mercury renders the selector shortly after its landing page. Wait for
+        # it instead of falling through to unrelated Continue/OK controls.
+        try:
+            page.wait_for_selector("#multipleLocations", state="attached", timeout=15000)
+        except Exception:
+            pass
+
         if apply_location_dropdown(page, store_name):
             log_page_debug_state(page, store_name, "_location_selected")
             return
