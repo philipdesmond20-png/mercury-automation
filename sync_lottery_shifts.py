@@ -95,7 +95,7 @@ def open_shifts_sync_view(page, store_name, target_date):
             (dates) => Array.from(document.querySelectorAll("[onclick*='openShift']"))
                 .some((node) => dates.includes((node.innerText || node.textContent || "").trim()))
             """,
-            target_dates,
+            arg=target_dates,
             timeout=30000,
         )
     except PlaywrightTimeoutError as exc:
