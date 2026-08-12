@@ -7,6 +7,8 @@ Online / Scratch / Payout rows on the Sales - Shifts screen, then saves.
 
 import os
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from main import (
@@ -22,6 +24,13 @@ from main import (
 
 
 ROW_LABELS = ("Online", "Scratch", "Payout")
+STORE_TIME_ZONE = ZoneInfo("America/New_York")
+
+
+def completed_store_day(now=None):
+    """Return the latest completed day in the stores' local timezone."""
+    local_now = now.astimezone(STORE_TIME_ZONE) if now else datetime.now(STORE_TIME_ZONE)
+    return local_now.date() - timedelta(days=1)
 
 
 def parse_currency_value(raw_text):
@@ -38,7 +47,29 @@ def parse_currency_value(raw_text):
     return match.group(0) if match else None
 
 
-def open_shifts_sync_view(page, store_name):
+def search_shifts_for_date(page, store_name, target_date):
+    target_date_text = target_date.strftime("%m/%d/%Y")
+    target_month = target_date.strftime("%B")
+    target_year = str(target_date.year)
+
+    page.wait_for_selector("#searchShiftMonth", timeout=30000)
+    page.wait_for_selector("#searchShiftYear", timeout=30000)
+
+    # The default search range is the current month. That fails on the first day
+    # of a month because the most recent completed shift belongs to last month.
+    page.select_option("#searchShiftMonth", label=target_month)
+    page.select_option("#searchShiftYear", value=target_year)
+
+    search_button = page.locator("button[onclick='doSearchShifts()']")
+    if search_button.count() != 1:
+        raise Exception(f"{store_name}: expected one Get Results button, found {search_button.count()}")
+
+    log(f"{store_name}: searching Sales - Shifts for {target_date_text}")
+    search_button.click()
+    settle_page(page, timeout=30000)
+
+
+def open_shifts_sync_view(page, store_name, target_date):
     click_first_available(
         page,
         [
@@ -51,18 +82,30 @@ def open_shifts_sync_view(page, store_name):
         timeout=20000,
     )
     settle_page(page, timeout=30000)
+    search_shifts_for_date(page, store_name, target_date)
 
-    page.wait_for_function(
-        """
-        () => Array.from(document.querySelectorAll("[onclick*='openShift']"))
-            .some((node) => /\\d{2}\\/\\d{2}\\/\\d{4}/.test((node.innerText || node.textContent || "").trim()))
-        """,
-        timeout=30000,
-    )
+    target_dates = [
+        target_date.strftime("%m/%d/%Y"),
+        f"{target_date.month}/{target_date.day}/{target_date.year}",
+    ]
+
+    try:
+        page.wait_for_function(
+            """
+            (dates) => Array.from(document.querySelectorAll("[onclick*='openShift']"))
+                .some((node) => dates.includes((node.innerText || node.textContent || "").trim()))
+            """,
+            target_dates,
+            timeout=30000,
+        )
+    except PlaywrightTimeoutError as exc:
+        raise Exception(
+            f"{store_name}: no clickable shift found for {target_dates[0]} after searching that date"
+        ) from exc
 
     shift_target = page.evaluate(
         """
-        () => {
+        (dates) => {
             const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
             const isVisible = (node) => {
                 if (!node) return false;
@@ -76,7 +119,7 @@ def open_shifts_sync_view(page, store_name):
                     text: clean(node.innerText || node.textContent),
                     onclick: node.getAttribute("onclick") || ""
                 }))
-                .filter((item) => /\\d{2}\\/\\d{2}\\/\\d{4}/.test(item.text));
+                .filter((item) => dates.includes(item.text));
 
             const chosen = candidates.find((item) => isVisible(item.node)) || candidates[0] || null;
             if (!chosen) return null;
@@ -86,7 +129,8 @@ def open_shifts_sync_view(page, store_name):
                 onclick: chosen.onclick
             };
         }
-        """
+        """,
+        target_dates,
     )
 
     if not shift_target or not shift_target.get("onclick"):
@@ -226,6 +270,14 @@ def sync_lottery_rows(page, store_name):
 
 
 def save_shift_changes(page, store_name):
+    lottery_save = page.locator("button[onclick='saveLotteryValues()']")
+    if lottery_save.count() == 1:
+        lottery_save.click()
+        log(f"{store_name}: clicked the lottery-specific Save button")
+        page.wait_for_timeout(3000)
+        settle_page(page, timeout=30000)
+        return
+
     clicked = page.evaluate(
         """
         () => {
@@ -314,7 +366,9 @@ def run_store(playwright, store_name, username, password):
         handle_location_selection(page, store_name)
 
         page.goto(f"{BASE_URL}/shifts/index", wait_until="networkidle", timeout=120000)
-        open_shifts_sync_view(page, store_name)
+        target_date = completed_store_day()
+        log(f"{store_name}: syncing completed store day {target_date.strftime('%m/%d/%Y')}")
+        open_shifts_sync_view(page, store_name, target_date)
         sync_lottery_rows(page, store_name)
         save_shift_changes(page, store_name)
 
