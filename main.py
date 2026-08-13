@@ -6,7 +6,11 @@ import requests
 import gspread
 from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import (
+    Error as PlaywrightError,
+    TimeoutError as PlaywrightTimeoutError,
+    sync_playwright,
+)
 
 BASE_URL = "https://monecloud.aboveo.com"
 SHEET_ID = "1syVhnG43KjivTIMy7GMfH1YNgbTJhnbw_a3D54GH6kU"
@@ -112,7 +116,12 @@ def get_page_debug_state(page):
 
 
 def log_page_debug_state(page, store_name, suffix):
-    state = get_page_debug_state(page)
+    try:
+        state = get_page_debug_state(page)
+    except PlaywrightError as exc:
+        # Debug output must not fail the real collection during a page transition.
+        log(f"{store_name}{suffix} debug state unavailable during navigation: {exc}")
+        return None
     log(f"{store_name}{suffix} state: {json.dumps(state, sort_keys=True)}")
     return state
 
@@ -338,6 +347,19 @@ def settle_page(page, timeout=30000):
     page.wait_for_timeout(2000)
 
 
+def wait_for_location_landing_page(page, store_name, timeout=30000):
+    """Wait for Mercury's Manage action to leave the location chooser."""
+    try:
+        page.wait_for_url(
+            lambda url: "/user/viewLocations" not in url,
+            wait_until="domcontentloaded",
+            timeout=timeout,
+        )
+    except PlaywrightTimeoutError:
+        log(f"{store_name}: location Manage did not navigate before timeout; checking page state")
+    settle_page(page, timeout=timeout)
+
+
 def apply_location_dropdown(page, store_name):
     select_locator = page.locator("#multipleLocations")
     try:
@@ -394,7 +416,7 @@ def handle_location_selection(page, store_name):
         return
 
     if try_click_named_location(page, store_name):
-        settle_page(page, timeout=120000)
+        wait_for_location_landing_page(page, store_name, timeout=120000)
         log_page_debug_state(page, store_name, "_location_after_manage")
 
         # Mercury renders the selector shortly after its landing page. Wait for
