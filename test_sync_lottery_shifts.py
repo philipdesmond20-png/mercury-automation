@@ -3,7 +3,13 @@ import unittest
 from unittest.mock import patch
 
 import sync_lottery_shifts
-from sync_lottery_shifts import completed_store_day, open_shifts_sync_view, save_shift_changes, search_shifts_for_date
+from sync_lottery_shifts import (
+    ShiftNotAvailable,
+    completed_store_day,
+    open_shifts_sync_view,
+    save_shift_changes,
+    search_shifts_for_date,
+)
 
 
 class FakeLocator:
@@ -51,6 +57,23 @@ class WaitForFunctionPage:
     def wait_for_function(self, expression, **kwargs):
         self.calls.append((expression, kwargs))
         raise StopAfterWait()
+
+
+class MissingShiftPage:
+    def wait_for_function(self, _expression, **_kwargs):
+        raise MissingShiftTimeout()
+
+
+class MissingShiftTimeout(Exception):
+    pass
+
+
+class FakePlaywrightContext:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
 
 
 class SaveLocator:
@@ -123,6 +146,47 @@ class CompletedStoreDayTests(unittest.TestCase):
             save_shift_changes(page, "Texaco")
 
         self.assertEqual(page.clicked, ["button[onclick='doSubmitShiftInfo()']"])
+
+    def test_missing_shift_is_deferred_instead_of_raising_a_generic_failure(self):
+        page = MissingShiftPage()
+
+        with (
+            patch.object(sync_lottery_shifts, "click_first_available"),
+            patch.object(sync_lottery_shifts, "settle_page"),
+            patch.object(sync_lottery_shifts, "search_shifts_for_date"),
+            patch.object(sync_lottery_shifts, "PlaywrightTimeoutError", MissingShiftTimeout),
+            self.assertRaises(ShiftNotAvailable),
+        ):
+            open_shifts_sync_view(page, "Carnesville", date(2026, 8, 13))
+
+    def test_main_completes_when_a_store_is_deferred(self):
+        results = [
+            {"store": "Texaco", "status": "updated"},
+            {"store": "Dalton", "status": "updated"},
+            {"store": "Rome KS3", "status": "updated"},
+            {"store": "Carnesville", "status": "deferred", "reason": "shift not available"},
+        ]
+        env = {
+            "STORE_TEXACO_USERNAME": "x",
+            "STORE_TEXACO_PASSWORD": "x",
+            "STORE_DALTON_USERNAME": "x",
+            "STORE_DALTON_PASSWORD": "x",
+            "STORE_ROME_USERNAME": "x",
+            "STORE_ROME_PASSWORD": "x",
+            "STORE_CARNESVILLE_USERNAME": "x",
+            "STORE_CARNESVILLE_PASSWORD": "x",
+        }
+
+        with (
+            patch.dict(sync_lottery_shifts.os.environ, env, clear=True),
+            patch.object(sync_lottery_shifts, "sync_playwright", return_value=FakePlaywrightContext()),
+            patch.object(sync_lottery_shifts, "run_store", side_effect=results),
+            patch.object(sync_lottery_shifts, "log") as log,
+        ):
+            sync_lottery_shifts.main()
+
+        log.assert_any_call("Lottery shift sync completed with deferred stores:")
+        log.assert_any_call("- Carnesville: shift not available")
 
 
 if __name__ == "__main__":

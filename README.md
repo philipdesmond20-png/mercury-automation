@@ -1,7 +1,7 @@
 # Mercury POS Daily Auto-Fill — Setup Guide
 
 ## What this does
-Every day at 8am (UTC), this script:
+Every day at 12pm (UTC), this script:
 1. Logs into each Mercury POS store account
 2. Downloads yesterday's CSV report
 3. Pastes it into the RAW_CSV tab in your Google Sheet
@@ -49,7 +49,7 @@ function doGet(e) {
 3. Push this folder to a GitHub repo
 4. In Render → New → Cron Job → connect your repo
 5. Add all environment variables (see below)
-6. Set schedule: `0 8 * * *` (8am UTC daily) — adjust for your timezone
+6. Set schedule: `0 12 * * *` (12pm UTC / 5:30pm IST daily).
 
 ---
 
@@ -72,10 +72,11 @@ function doGet(e) {
 
 ---
 
-## Timezone note
-The schedule `0 8 * * *` runs at 8am UTC.
-- UTC+5:30 (India): that's 1:30pm IST
-- Adjust the hour to whatever time you want the sheet filled each day
+## Active GitHub schedules
+- **Mercury POS Daily Collection:** `0 12 * * *` runs at 5:30pm IST and updates all Google Sheet store tabs.
+- **Mercury POS Lottery Shift Sync:** `30 15 * * *` runs at 9:00pm IST and fills the Mercury POS lottery amounts.
+
+Google Sheets `429` and transient `5xx` responses are retried automatically. If a store's completed-day shift is not yet present, that store is recorded as deferred while the other stores continue.
 
 ---
 

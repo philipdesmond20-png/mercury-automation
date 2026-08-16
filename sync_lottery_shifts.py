@@ -27,6 +27,10 @@ ROW_LABELS = ("Online", "Scratch", "Payout")
 STORE_TIME_ZONE = ZoneInfo("America/New_York")
 
 
+class ShiftNotAvailable(Exception):
+    """The requested completed-store day is not yet present in Mercury."""
+
+
 def completed_store_day(now=None):
     """Return the latest completed day in the stores' local timezone."""
     local_now = now.astimezone(STORE_TIME_ZONE) if now else datetime.now(STORE_TIME_ZONE)
@@ -99,7 +103,7 @@ def open_shifts_sync_view(page, store_name, target_date):
             timeout=30000,
         )
     except PlaywrightTimeoutError as exc:
-        raise Exception(
+        raise ShiftNotAvailable(
             f"{store_name}: no clickable shift found for {target_dates[0]} after searching that date"
         ) from exc
 
@@ -376,6 +380,12 @@ def run_store(playwright, store_name, username, password):
 
         log_page_debug_state(page, store_name, "_lottery_shift_sync_done")
         save_debug(page, store_name, "_lottery_shift_sync_done")
+        return {"store": store_name, "status": "updated"}
+    except ShiftNotAvailable as exc:
+        log(f"{store_name}: deferred - {exc}")
+        log_page_debug_state(page, store_name, "_lottery_shift_sync_deferred")
+        save_debug(page, store_name, "_lottery_shift_sync_deferred")
+        return {"store": store_name, "status": "deferred", "reason": str(exc)}
     except Exception:
         log_page_debug_state(page, store_name, "_lottery_shift_sync_error")
         save_debug(page, store_name, "_lottery_shift_sync_error")
@@ -393,11 +403,18 @@ def main():
         ("Carnesville", os.environ["STORE_CARNESVILLE_USERNAME"], os.environ["STORE_CARNESVILLE_PASSWORD"]),
     ]
 
+    results = []
     with sync_playwright() as playwright:
         for store_name, username, password in stores:
-            run_store(playwright, store_name, username, password)
+            results.append(run_store(playwright, store_name, username, password))
 
-    log("Lottery shift sync completed successfully")
+    deferred_stores = [result for result in results if result["status"] == "deferred"]
+    if deferred_stores:
+        log("Lottery shift sync completed with deferred stores:")
+        for result in deferred_stores:
+            log(f"- {result['store']}: {result['reason']}")
+    else:
+        log("Lottery shift sync completed successfully")
 
 
 if __name__ == "__main__":

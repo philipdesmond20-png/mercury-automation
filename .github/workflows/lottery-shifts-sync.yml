@@ -2,7 +2,7 @@ name: Mercury POS Lottery Shift Sync
 
 on:
   schedule:
-    - cron: '30 11 * * *'
+    - cron: '30 15 * * *'
   workflow_dispatch:
 
 jobs:

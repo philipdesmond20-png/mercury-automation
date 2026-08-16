@@ -2,10 +2,12 @@ import os
 import io
 import csv
 import json
+import time
 import requests
 import gspread
 from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
+from gspread.exceptions import APIError
 from playwright.sync_api import (
     Error as PlaywrightError,
     TimeoutError as PlaywrightTimeoutError,
@@ -27,6 +29,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+GOOGLE_SHEETS_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+GOOGLE_SHEETS_MAX_ATTEMPTS = 4
+
 
 def log(msg):
     print(msg, flush=True)
@@ -36,6 +41,25 @@ def get_google_client():
     creds_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     return gspread.authorize(creds)
+
+
+def retry_google_sheets(operation_name, operation):
+    """Retry Google Sheets transient failures without masking permanent errors."""
+    for attempt in range(GOOGLE_SHEETS_MAX_ATTEMPTS):
+        try:
+            return operation()
+        except APIError as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            is_last_attempt = attempt == GOOGLE_SHEETS_MAX_ATTEMPTS - 1
+            if status_code not in GOOGLE_SHEETS_RETRY_STATUS_CODES or is_last_attempt:
+                raise
+
+            delay_seconds = 2 ** attempt
+            log(
+                f"{operation_name}: Google Sheets returned {status_code}; "
+                f"retrying in {delay_seconds}s ({attempt + 2}/{GOOGLE_SHEETS_MAX_ATTEMPTS})"
+            )
+            time.sleep(delay_seconds)
 
 
 def save_text(path, text):
@@ -636,11 +660,14 @@ def build_store_block(store_name, csv_text):
 
 def upload_combined_to_raw_csv(all_rows):
     log("Uploading combined data to RAW_CSV")
-    gc = get_google_client()
-    sh = gc.open_by_key(SHEET_ID)
-    ws = sh.worksheet("RAW_CSV")
-    ws.clear()
-    ws.update("A1", all_rows)
+    def upload():
+        gc = get_google_client()
+        sh = gc.open_by_key(SHEET_ID)
+        ws = sh.worksheet("RAW_CSV")
+        ws.clear()
+        ws.update("A1", all_rows)
+
+    retry_google_sheets("RAW_CSV upload", upload)
     log("RAW_CSV updated")
 
 
